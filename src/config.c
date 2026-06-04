@@ -712,6 +712,36 @@ static int parse_descriptor(char *s,
 			}
 		}
 
+		if (!strcmp(fn, "oneshot") && nargs >= 2) {
+			size_t k;
+
+			if (nargs > MAX_DESCRIPTOR_ARGS) {
+				err("oneshot supports at most %d layers", MAX_DESCRIPTOR_ARGS);
+				return -1;
+			}
+
+			d->op = OP_ONESHOT_MULTI;
+
+			for (k = 0; k < nargs; k++) {
+				if (!strcmp(args[k], "main")) {
+					err("the main layer cannot be toggled");
+					return -1;
+				}
+
+				d->layer_multi.idx[k] = config_get_layer_index(config, args[k]);
+				if (d->layer_multi.idx[k] == -1 ||
+				    config->layers[(int)d->layer_multi.idx[k]].type == LT_LAYOUT) {
+					err("%s is not a valid layer", args[k]);
+					return -1;
+				}
+			}
+
+			if (nargs < MAX_DESCRIPTOR_ARGS)
+				d->layer_multi.idx[nargs] = -1;
+
+			return 0;
+		}
+
 		for (i = 0; i < ARRAY_SIZE(actions); i++) {
 			if (!strcmp(actions[i].name, fn)) {
 				int j;

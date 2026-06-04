@@ -680,6 +680,29 @@ static long process_descriptor(struct keyboard *kbd, uint8_t code,
 		}
 
 		break;
+	case OP_ONESHOT_MULTI: {
+		int k;
+		if (pressed) {
+			for (k = 0; k < MAX_DESCRIPTOR_ARGS && d->layer_multi.idx[k] != -1; k++)
+				activate_layer(kbd, code, d->layer_multi.idx[k]);
+			update_mods(kbd, dl, 0);
+			kbd->oneshot_latch = 1;
+		} else {
+			if (kbd->oneshot_latch) {
+				for (k = 0; k < MAX_DESCRIPTOR_ARGS && d->layer_multi.idx[k] != -1; k++)
+					kbd->layer_state[d->layer_multi.idx[k]].oneshot_depth++;
+				if (kbd->config.oneshot_timeout) {
+					kbd->oneshot_timeout = time + kbd->config.oneshot_timeout;
+					schedule_timeout(kbd, kbd->oneshot_timeout);
+				}
+			} else {
+				for (k = 0; k < MAX_DESCRIPTOR_ARGS && d->layer_multi.idx[k] != -1; k++)
+					deactivate_layer(kbd, d->layer_multi.idx[k]);
+				update_mods(kbd, -1, 0);
+			}
+		}
+		break;
+	}
 	case OP_ONESHOTM:
 	case OP_ONESHOTK:
 	case OP_ONESHOT:

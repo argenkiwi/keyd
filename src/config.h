@@ -30,6 +30,7 @@ enum op {
 	OP_KEYSEQUENCE = 1,
 
 	OP_ONESHOT,
+	OP_ONESHOT_MULTI,
 	OP_ONESHOTM,
 	OP_ONESHOTK,
 	OP_LAYERM,
@@ -75,6 +76,7 @@ union descriptor_arg {
  */
 struct desc_keysequence { uint8_t code; uint8_t mods; };            /* OP_KEYSEQUENCE */
 struct desc_layer        { int16_t idx; };                           /* OP_LAYER, OP_ONESHOT, OP_TOGGLE, OP_SWAP, OP_LAYOUT */
+struct desc_layer_multi  { int16_t idx[3]; };                        /* OP_ONESHOT_MULTI */
 struct desc_macro        { int16_t macro_idx; };                     /* OP_MACRO, OP_CLEARM */
 struct desc_command      { int16_t cmd_idx; };                       /* OP_COMMAND */
 struct desc_scroll       { int16_t sensitivity; };                   /* OP_SCROLL, OP_SCROLL_TOGGLE_ON, OP_SCROLL_TOGGLE */
@@ -85,6 +87,7 @@ struct desc_overload_idle { int16_t action1_idx; int16_t action2_idx; uint16_t t
 struct desc_timeout      { int16_t action1_idx; uint16_t timeout; int16_t action2_idx; }; /* OP_TIMEOUT */
 struct desc_macro2       { uint16_t delay; uint16_t interval; int16_t macro_idx; };   /* OP_MACRO2 */
 
+_Static_assert(sizeof(struct desc_layer_multi)   <= sizeof(union descriptor_arg[MAX_DESCRIPTOR_ARGS]), "desc_layer_multi too large");
 _Static_assert(sizeof(struct desc_keysequence)   <= sizeof(union descriptor_arg[MAX_DESCRIPTOR_ARGS]), "desc_keysequence too large");
 _Static_assert(sizeof(struct desc_layer_macro)   <= sizeof(union descriptor_arg[MAX_DESCRIPTOR_ARGS]), "desc_layer_macro too large");
 _Static_assert(sizeof(struct desc_overload)      <= sizeof(union descriptor_arg[MAX_DESCRIPTOR_ARGS]), "desc_overload too large");
@@ -100,6 +103,7 @@ struct descriptor {
 	union {
 		struct desc_keysequence  keysequence;
 		struct desc_layer        layer;
+		struct desc_layer_multi  layer_multi;
 		struct desc_macro        macro_op;
 		struct desc_command      command;
 		struct desc_scroll       scroll;
