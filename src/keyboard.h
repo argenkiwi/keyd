@@ -31,8 +31,62 @@ struct key_event {
 };
 
 struct output {
-	void (*send_key) (uint8_t code, uint8_t state);
-	void (*on_layer_change) (const struct keyboard *kbd, const struct layer *layer, uint8_t active);
+	void *ctx;
+	void (*send_key)(void *ctx, uint8_t code, uint8_t state);
+	void (*on_layer_change)(void *ctx, const struct keyboard *kbd, const struct layer *layer, uint8_t active);
+};
+
+enum chord_status {
+	CHORD_RESOLVING,
+	CHORD_INACTIVE,
+	CHORD_PENDING_DISAMBIGUATION,
+	CHORD_PENDING_HOLD_TIMEOUT,
+};
+
+struct chord_state {
+	struct key_event queue[32];
+	size_t queue_sz;
+
+	const struct chord *match;
+	int match_layer;
+
+	uint8_t start_code;
+	long last_code_time;
+
+	enum chord_status state;
+};
+
+struct timeout_state {
+	uint8_t code;
+	uint8_t dl;
+	uint8_t spontaneous;
+
+	long expiration;
+	long activation_time;
+
+	struct descriptor action1;
+	struct descriptor action2;
+};
+
+struct overload_state {
+	uint8_t code;
+	uint8_t dl;
+	long expiration;
+
+	int resolve_on_interrupt;
+
+	struct key_event queue[32];
+	size_t queue_sz;
+
+	struct descriptor action1;
+	struct descriptor action2;
+};
+
+struct macro_play_state {
+	struct macro *active;
+	int layer;
+	long timeout;
+	long repeat_interval;
 };
 
 /* May correspond to more than one physical input device. */
@@ -54,21 +108,17 @@ struct keyboard {
 
 	uint8_t inhibit_modifier_guard;
 
-	struct macro *active_macro;
-	int active_macro_layer;
+	struct macro_play_state macro_play;
 	int overload_last_layer_code;
 
-	long macro_timeout;
 	long oneshot_timeout;
-
-	long macro_repeat_interval;
 
 	long overload_start_time;
 
 	long last_simple_key_time;
 
 	long timeouts[128];
-	size_t nr_timeouts; 
+	size_t nr_timeouts;
 
 	struct active_chord {
 		uint8_t active;
@@ -76,49 +126,11 @@ struct keyboard {
 		int layer;
 	} active_chords[KEYD_CHORD_MAX-KEYD_CHORD_1+1];
 
-	struct {
-		struct key_event queue[32];
-		size_t queue_sz;
+	struct chord_state chord;
 
-		const struct chord *match;
-		int match_layer;
+	struct timeout_state pending_timeout;
 
-		uint8_t start_code;
-		long last_code_time;
-
-		enum {
-			CHORD_RESOLVING,
-			CHORD_INACTIVE,
-			CHORD_PENDING_DISAMBIGUATION,
-			CHORD_PENDING_HOLD_TIMEOUT,
-		} state;
-	} chord;
-
-	struct pending_timeout {
-		uint8_t code;
-		uint8_t dl;
-		uint8_t spontaneous;
-
-		long expiration;
-		long activation_time;
-
-		struct descriptor action1;
-		struct descriptor action2;
-	} pending_timeout;
-
-	struct pending_overload {
-		uint8_t code;
-		uint8_t dl;
-		long expiration;
-
-		int resolve_on_interrupt;
-
-		struct key_event queue[32];
-		size_t queue_sz;
-
-		struct descriptor action1;
-		struct descriptor action2;
-	} pending_overload;
+	struct overload_state pending_overload;
 
 	struct {
 		long activation_time;

@@ -331,7 +331,7 @@ static long get_time_ms(void)
 	return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
 }
 
-int evloop(int (*event_handler)(struct event *ev))
+int evloop(int (*event_handler)(struct event *, void *), void *ctx)
 {
 	pthread_t tid;
 	struct event ev;
@@ -349,7 +349,7 @@ int evloop(int (*event_handler)(struct event *ev))
 	/* Notify the event handler that the synthetic device was added. */
 	ev.type = EV_DEV_ADD;
 	ev.dev  = &device_table[0];
-	event_handler(&ev);
+	event_handler(&ev, ctx);
 
 	/* Start the CGEventTap on a background thread. */
 	if (pthread_create(&tid, NULL, tap_thread, NULL) != 0) {
@@ -383,7 +383,7 @@ int evloop(int (*event_handler)(struct event *ev))
 			ev.type  = EV_TIMEOUT;
 			ev.dev   = NULL;
 			ev.devev = NULL;
-			timeout  = event_handler(&ev);
+			timeout  = event_handler(&ev, ctx);
 		} else {
 			timeout -= (int)elapsed;
 			if (timeout < 0)
@@ -398,7 +398,7 @@ int evloop(int (*event_handler)(struct event *ev))
 				ev.type  = EV_DEV_EVENT;
 				ev.devev = devev;
 				ev.dev   = &device_table[0];
-				timeout  = event_handler(&ev);
+				timeout  = event_handler(&ev, ctx);
 			}
 		}
 
@@ -409,7 +409,7 @@ int evloop(int (*event_handler)(struct event *ev))
 				ev.type = (revents & POLLERR) ? EV_FD_ERR
 							       : EV_FD_ACTIVITY;
 				ev.fd   = s_aux_fds[i];
-				timeout = event_handler(&ev);
+				timeout = event_handler(&ev, ctx);
 			}
 		}
 	}

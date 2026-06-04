@@ -6,19 +6,21 @@ struct config_ent {
 	struct config_ent *next;
 };
 
-static int ipcfd = -1;
-static struct vkbd *vkbd = NULL;
-static struct config_ent *configs;
+struct daemon {
+	int ipcfd;
+	struct vkbd *vkbd;
+	struct config_ent *configs;
+	uint8_t keystate[256];
+	int listeners[32];
+	size_t nr_listeners;
+	struct keyboard *active_kbd;
+};
 
-static uint8_t keystate[256];
+static struct daemon *g_daemon_ptr;
 
-static int listeners[32];
-static size_t nr_listeners = 0;
-static struct keyboard *active_kbd = NULL;
-
-static void free_configs(void)
+static void free_configs(struct daemon *d)
 {
-	struct config_ent *ent = configs;
+	struct config_ent *ent = d->configs;
 	while (ent) {
 		struct config_ent *tmp = ent;
 		ent = ent->next;
@@ -26,59 +28,61 @@ static void free_configs(void)
 		free(tmp);
 	}
 
-	configs = NULL;
+	d->configs = NULL;
 }
 
 static void cleanup(void)
 {
-	free_configs();
-	free_vkbd(vkbd);
+	free_configs(g_daemon_ptr);
+	free_vkbd(g_daemon_ptr->vkbd);
 }
 
-static void clear_vkbd(void)
+static void clear_vkbd(struct daemon *d)
 {
 	size_t i;
 
 	for (i = 0; i < 256; i++)
-		if (keystate[i]) {
-			vkbd_send_key(vkbd, i, 0);
-			keystate[i] = 0;
+		if (d->keystate[i]) {
+			vkbd_send_key(d->vkbd, i, 0);
+			d->keystate[i] = 0;
 		}
 }
 
-static void send_key(uint8_t code, uint8_t state)
+static void send_key(void *ctx, uint8_t code, uint8_t state)
 {
-	keystate[code] = state;
+	struct daemon *d = ctx;
+
+	d->keystate[code] = state;
 
 	switch (code) {
 		case KEYD_SCROLL_DOWN:
 			if (state)
-				vkbd_mouse_scroll(vkbd, 0, -1);
+				vkbd_mouse_scroll(d->vkbd, 0, -1);
 			break;
 		case KEYD_SCROLL_UP:
 			if (state)
-				vkbd_mouse_scroll(vkbd, 0, 1);
+				vkbd_mouse_scroll(d->vkbd, 0, 1);
 			break;
 		case KEYD_SCROLL_RIGHT:
 			if (state)
-				vkbd_mouse_scroll(vkbd, 1, 0);
+				vkbd_mouse_scroll(d->vkbd, 1, 0);
 			break;
 		case KEYD_SCROLL_LEFT:
 			if (state)
-				vkbd_mouse_scroll(vkbd, -1, 0);
+				vkbd_mouse_scroll(d->vkbd, -1, 0);
 			break;
 		default:
-			vkbd_send_key(vkbd, code, state);
+			vkbd_send_key(d->vkbd, code, state);
 			break;
 	}
 }
 
 static void send_key_macro_wrapper(void *ctx, uint8_t code, uint8_t state)
 {
-	send_key(code, state);
+	send_key(ctx, code, state);
 }
 
-static void add_listener(int con)
+static void add_listener(struct daemon *d, int con)
 {
 	struct timeval tv;
 
@@ -89,7 +93,7 @@ static void add_listener(int con)
 	tv.tv_usec = 50000;
 	tv.tv_sec = 0;
 
-	if (nr_listeners == ARRAY_SIZE(listeners)) {
+	if (d->nr_listeners == ARRAY_SIZE(d->listeners)) {
 		char s[] = "Max listeners exceeded\n";
 		xwrite(con, &s, sizeof s);
 
@@ -99,13 +103,13 @@ static void add_listener(int con)
 
 	setsockopt(con, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
 
-	if (active_kbd) {
+	if (d->active_kbd) {
 		size_t i;
-		struct config *config = &active_kbd->config;
+		struct config *config = &d->active_kbd->config;
 		struct layer *layout = &config->layers[0];
 
 		for (i = 1; i < config->nr_layers; i++)
-			if (active_kbd->layer_state[i].active) {
+			if (d->active_kbd->layer_state[i].active) {
 				struct layer *layer = &config->layers[i];
 
 				if (layer->type == LT_LAYOUT) {
@@ -117,7 +121,7 @@ static void add_listener(int con)
 		dprintf(con, "/%s\n", layout->name);
 
 		for (i = 1; i < config->nr_layers; i++) {
-			if (active_kbd->layer_state[i].active) {
+			if (d->active_kbd->layer_state[i].active) {
 				ssize_t ret;
 				struct layer *layer = &config->layers[i];
 
@@ -130,20 +134,21 @@ static void add_listener(int con)
 		}
 	}
 
-	listeners[nr_listeners++] = con;
+	d->listeners[d->nr_listeners++] = con;
 	return;
 fail:
 	close(con);
 	return;
 }
 
-static void on_layer_change(const struct keyboard *kbd, const struct layer *layer, uint8_t state)
+static void on_layer_change(void *ctx, const struct keyboard *kbd, const struct layer *layer, uint8_t state)
 {
+	struct daemon *d = ctx;
 	size_t i;
 	char buf[MAX_LAYER_NAME_LEN+2];
 	ssize_t bufsz;
 
-	int keep[ARRAY_SIZE(listeners)];
+	int keep[ARRAY_SIZE(d->listeners)];
 	size_t n = 0;
 
 	if (kbd->config.layer_indicator) {
@@ -156,11 +161,11 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 			}
 
 		for (i = 0; i < device_table_sz; i++)
-			if (device_table[i].data == kbd)
+			if (device_table[i].kbd == kbd)
 				device_set_led(&device_table[i], 1, active_layers);
 	}
 
-	if (!nr_listeners)
+	if (!d->nr_listeners)
 		return;
 
 	if (layer->type == LT_LAYOUT)
@@ -168,32 +173,32 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 	else
 		bufsz = snprintf(buf, sizeof(buf), "%c%s\n", state ? '+' : '-', layer->name);
 
-	for (i = 0; i < nr_listeners; i++) {
-		ssize_t nw = write(listeners[i], buf, bufsz);
+	for (i = 0; i < d->nr_listeners; i++) {
+		ssize_t nw = write(d->listeners[i], buf, bufsz);
 
 		if (nw == bufsz)
-			keep[n++] = listeners[i];
+			keep[n++] = d->listeners[i];
 		else
-			close(listeners[i]);
+			close(d->listeners[i]);
 	}
 
-	if (n != nr_listeners) {
-		nr_listeners = n;
-		memcpy(listeners, keep, n * sizeof(int));
+	if (n != d->nr_listeners) {
+		d->nr_listeners = n;
+		memcpy(d->listeners, keep, n * sizeof(int));
 	}
 }
 
-static void load_configs(void)
+static int load_configs(struct daemon *d)
 {
 	DIR *dh = opendir(CONFIG_DIR);
 	struct dirent *dirent;
 
 	if (!dh) {
-		perror("opendir");
-		exit(-1);
+		err("opendir %s: %s", CONFIG_DIR, strerror(errno));
+		return -1;
 	}
 
-	configs = NULL;
+	d->configs = NULL;
 
 	while ((dirent = readdir(dh))) {
 		char path[1024];
@@ -211,13 +216,14 @@ static void load_configs(void)
 
 			if (config_parse(&ent->config, path) >= 0) {
 				struct output output = {
+					.ctx = d,
 					.send_key = send_key,
 					.on_layer_change = on_layer_change,
 				};
 				ent->kbd = new_keyboard(&ent->config, &output);
 
-				ent->next = configs;
-				configs = ent;
+				ent->next = d->configs;
+				d->configs = ent;
 			} else {
 				free(ent);
 				keyd_log("DEVICE: y{WARNING} failed to parse %s\n", path);
@@ -227,11 +233,12 @@ static void load_configs(void)
 	}
 
 	closedir(dh);
+	return 0;
 }
 
-static struct config_ent *lookup_config_ent(const char *id, uint8_t flags)
+static struct config_ent *lookup_config_ent(struct daemon *d, const char *id, uint8_t flags)
 {
-	struct config_ent *ent = configs;
+	struct config_ent *ent = d->configs;
 	struct config_ent *match = NULL;
 	int rank = 0;
 
@@ -257,7 +264,7 @@ static struct config_ent *lookup_config_ent(const char *id, uint8_t flags)
 	}
 }
 
-static void manage_device(struct device *dev)
+static void manage_device(struct daemon *d, struct device *dev)
 {
 	uint8_t flags = 0;
 	struct config_ent *ent;
@@ -274,35 +281,38 @@ static void manage_device(struct device *dev)
 	if (dev->capabilities & CAP_MOUSE)
 		flags |= ID_MOUSE;
 
-	if ((ent = lookup_config_ent(dev->id, flags))) {
+	if ((ent = lookup_config_ent(d, dev->id, flags))) {
 		if (device_grab(dev)) {
 			keyd_log("DEVICE: y{WARNING} Failed to grab %s\n", dev->path);
-			dev->data = NULL;
+			dev->kbd = NULL;
 			return;
 		}
 
 		keyd_log("DEVICE: g{match}    %s  %s\t(%s)\n",
 			  dev->id, ent->config.path, dev->name);
 
-		dev->data = ent->kbd;
+		dev->kbd = ent->kbd;
 	} else {
-		dev->data = NULL;
+		dev->kbd = NULL;
 		device_ungrab(dev);
 		keyd_log("DEVICE: r{ignoring} %s  (%s)\n", dev->id, dev->name);
 	}
 }
 
-static void reload(void)
+static void reload(struct daemon *d)
 {
 	size_t i;
 
-	free_configs();
-	load_configs();
+	free_configs(d);
+	if (load_configs(d) < 0) {
+		keyd_log("DAEMON: y{WARNING} failed to load configs: %s\n", errstr);
+		return;
+	}
 
 	for (i = 0; i < device_table_sz; i++)
-		manage_device(&device_table[i]);
+		manage_device(d, &device_table[i]);
 
-	clear_vkbd();
+	clear_vkbd(d);
 }
 
 static void send_success(int con)
@@ -332,10 +342,11 @@ static void send_fail(int con, const char *fmt, ...)
 	va_end(args);
 }
 
-static int input(char *buf, size_t sz, uint32_t timeout)
+static int input(struct daemon *d, char *buf, size_t sz, uint32_t timeout)
 {
 	size_t i;
 	uint32_t codepoint;
+	(void)sz;
 	uint8_t codes[4];
 
 	int csz;
@@ -352,23 +363,23 @@ static int input(char *buf, size_t sz, uint32_t timeout)
 			found = 1;
 			if (!parse_key_sequence(s, &code, &mods)) {
 				if (mods & MOD_SHIFT) {
-					vkbd_send_key(vkbd, KEYD_LEFTSHIFT, 1);
-					vkbd_send_key(vkbd, code, 1);
-					vkbd_send_key(vkbd, code, 0);
-					vkbd_send_key(vkbd, KEYD_LEFTSHIFT, 0);
+					vkbd_send_key(d->vkbd, KEYD_LEFTSHIFT, 1);
+					vkbd_send_key(d->vkbd, code, 1);
+					vkbd_send_key(d->vkbd, code, 0);
+					vkbd_send_key(d->vkbd, KEYD_LEFTSHIFT, 0);
 				} else {
-					vkbd_send_key(vkbd, code, 1);
-					vkbd_send_key(vkbd, code, 0);
+					vkbd_send_key(d->vkbd, code, 1);
+					vkbd_send_key(d->vkbd, code, 0);
 				}
 			} else if ((char)codepoint == ' ') {
-				vkbd_send_key(vkbd, KEYD_SPACE, 1);
-				vkbd_send_key(vkbd, KEYD_SPACE, 0);
+				vkbd_send_key(d->vkbd, KEYD_SPACE, 1);
+				vkbd_send_key(d->vkbd, KEYD_SPACE, 0);
 			} else if ((char)codepoint == '\n') {
-				vkbd_send_key(vkbd, KEYD_ENTER, 1);
-				vkbd_send_key(vkbd, KEYD_ENTER, 0);
+				vkbd_send_key(d->vkbd, KEYD_ENTER, 1);
+				vkbd_send_key(d->vkbd, KEYD_ENTER, 0);
 			} else if ((char)codepoint == '\t') {
-				vkbd_send_key(vkbd, KEYD_TAB, 1);
-				vkbd_send_key(vkbd, KEYD_TAB, 0);
+				vkbd_send_key(d->vkbd, KEYD_TAB, 1);
+				vkbd_send_key(d->vkbd, KEYD_TAB, 0);
 			} else {
 				found = 0;
 			}
@@ -384,8 +395,8 @@ static int input(char *buf, size_t sz, uint32_t timeout)
 			unicode_get_sequence(idx, codes);
 
 			for (i = 0; i < 4; i++) {
-				vkbd_send_key(vkbd, codes[i], 1);
-				vkbd_send_key(vkbd, codes[i], 0);
+				vkbd_send_key(d->vkbd, codes[i], 1);
+				vkbd_send_key(d->vkbd, codes[i], 0);
 			}
 		}
 		buf+=csz;
@@ -397,7 +408,7 @@ static int input(char *buf, size_t sz, uint32_t timeout)
 	return 0;
 }
 
-static void handle_client(int con)
+static void handle_client(struct daemon *d, int con)
 {
 	struct ipc_message msg;
 
@@ -428,22 +439,22 @@ static void handle_client(int con)
 			return;
 		}
 
-		macro_execute(send_key_macro_wrapper, NULL, &macro, msg.timeout);
+		macro_execute(send_key_macro_wrapper, d, &macro, msg.timeout);
 		send_success(con);
 
 		break;
 	case IPC_INPUT:
-		if (input(msg.data, msg.sz, msg.timeout))
+		if (input(d, msg.data, msg.sz, msg.timeout))
 			send_fail(con, "%s", errstr);
 		else
 			send_success(con);
 		break;
 	case IPC_RELOAD:
-		reload();
+		reload(d);
 		send_success(con);
 		break;
 	case IPC_LAYER_LISTEN:
-		add_listener(con);
+		add_listener(d, con);
 		break;
 	case IPC_BIND:
 		success = 0;
@@ -455,7 +466,7 @@ static void handle_client(int con)
 
 		msg.data[msg.sz] = 0;
 
-		for (ent = configs; ent; ent = ent->next) {
+		for (ent = d->configs; ent; ent = ent->next) {
 			if (!kbd_eval(ent->kbd, msg.data))
 				success = 1;
 		}
@@ -487,10 +498,11 @@ static long process_keypress(struct keyboard *kbd, uint8_t code, int timestamp)
 	return kbd_process_events(kbd, &kev, 1);
 }
 
-static int event_handler(struct event *ev)
+static int event_handler(struct event *ev, void *ctx)
 {
 	static int last_time = 0;
 	static int timeout = 0;
+	struct daemon *d = ctx;
 	struct key_event kev = {0};
 
 	timeout -= ev->timestamp - last_time;
@@ -500,18 +512,18 @@ static int event_handler(struct event *ev)
 
 	switch (ev->type) {
 	case EV_TIMEOUT:
-		if (!active_kbd)
+		if (!d->active_kbd)
 			return 0;
 
 		kev.code = 0;
 		kev.timestamp = ev->timestamp;
 
-		timeout = kbd_process_events(active_kbd, &kev, 1);
+		timeout = kbd_process_events(d->active_kbd, &kev, 1);
 		break;
 	case EV_DEV_EVENT:
-		if (ev->dev->data) {
-			struct keyboard *kbd = ev->dev->data;
-			active_kbd = ev->dev->data;
+		if (ev->dev->kbd) {
+			struct keyboard *kbd = ev->dev->kbd;
+			d->active_kbd = ev->dev->kbd;
 			switch (ev->devev->type) {
 			size_t i;
 			case DEV_KEY:
@@ -538,68 +550,68 @@ static int event_handler(struct event *ev)
 					xticks = kbd->scroll.x / kbd->scroll.sensitivity;
 					kbd->scroll.x %= kbd->scroll.sensitivity;
 
-					vkbd_mouse_scroll(vkbd, 0, -1*yticks);
-					vkbd_mouse_scroll(vkbd, 0, xticks);
+					vkbd_mouse_scroll(d->vkbd, 0, -1*yticks);
+					vkbd_mouse_scroll(d->vkbd, 0, xticks);
 				} else {
-					vkbd_mouse_move(vkbd, ev->devev->x, ev->devev->y);
+					vkbd_mouse_move(d->vkbd, ev->devev->x, ev->devev->y);
 				}
 				break;
 			case DEV_MOUSE_MOVE_ABS:
-				vkbd_mouse_move_abs(vkbd, ev->devev->x, ev->devev->y);
+				vkbd_mouse_move_abs(d->vkbd, ev->devev->x, ev->devev->y);
 				break;
 			case DEV_MOUSE_SCROLL:
-				if (active_kbd) {
+				if (d->active_kbd) {
 					if (ev->devev->x > 0)
 						for (i = 0;i < (size_t)ev->devev->x; i++)
-							timeout = process_keypress(active_kbd, KEYD_SCROLL_RIGHT, ev->timestamp);
+							timeout = process_keypress(d->active_kbd, KEYD_SCROLL_RIGHT, ev->timestamp);
 					if (ev->devev->x < 0)
 						for (i = 0;i < (size_t)-1*ev->devev->x; i++)
-							timeout = process_keypress(active_kbd, KEYD_SCROLL_LEFT, ev->timestamp);
+							timeout = process_keypress(d->active_kbd, KEYD_SCROLL_LEFT, ev->timestamp);
 					if (ev->devev->y > 0)
 						for (i = 0;i < (size_t)ev->devev->y; i++)
-							timeout = process_keypress(active_kbd, KEYD_SCROLL_UP, ev->timestamp);
+							timeout = process_keypress(d->active_kbd, KEYD_SCROLL_UP, ev->timestamp);
 					if (ev->devev->y < 0)
 						for (i = 0;i < (size_t)-1*ev->devev->y; i++)
-							timeout = process_keypress(active_kbd, KEYD_SCROLL_DOWN, ev->timestamp);
+							timeout = process_keypress(d->active_kbd, KEYD_SCROLL_DOWN, ev->timestamp);
 				}
 				break;
 			default:
 				break;
 			}
 		} else if (!ev->dev->is_virtual && ev->dev->capabilities & CAP_MOUSE) {
-			if (active_kbd && (ev->devev->type == DEV_KEY || ev->devev->type == DEV_MOUSE_SCROLL))
-				timeout = process_keypress(active_kbd, KEYD_EXTERNAL_MOUSE_BUTTON, ev->timestamp);
+			if (d->active_kbd && (ev->devev->type == DEV_KEY || ev->devev->type == DEV_MOUSE_SCROLL))
+				timeout = process_keypress(d->active_kbd, KEYD_EXTERNAL_MOUSE_BUTTON, ev->timestamp);
 		} else if (ev->dev->is_virtual && ev->devev->type == DEV_LED) {
 			size_t i;
 
-			/* 
+			/*
 			 * Propagate LED events received by the virtual device from userspace
 			 * to all grabbed devices.
 			 *
 			 * NOTE/TODO: Account for potential layer_indicator interference
 			 */
 			for (i = 0; i < device_table_sz; i++)
-				if (device_table[i].data)
+				if (device_table[i].kbd)
 					device_set_led(&device_table[i], ev->devev->code, ev->devev->pressed);
 		}
 
 		break;
 	case EV_DEV_ADD:
-		manage_device(ev->dev);
+		manage_device(d, ev->dev);
 		break;
 	case EV_DEV_REMOVE:
 		keyd_log("DEVICE: r{removed}\t%s %s\n", ev->dev->id, ev->dev->name);
 
 		break;
 	case EV_FD_ACTIVITY:
-		if (ev->fd == ipcfd) {
-			int con = accept(ipcfd, NULL, 0);
+		if (ev->fd == d->ipcfd) {
+			int con = accept(d->ipcfd, NULL, 0);
 			if (con < 0) {
 				perror("accept");
 				exit(-1);
 			}
 
-			handle_client(con);
+			handle_client(d, con);
 		}
 		break;
 	default:
@@ -611,13 +623,20 @@ static int event_handler(struct event *ev)
 
 int run_daemon(int argc, char *argv[])
 {
+	struct daemon d = {0};
+#ifndef __APPLE__
 	struct sched_param sp;
-	ipcfd = ipc_create_server();
+#endif
 
-	if (ipcfd < 0)
+	(void)argc;
+	(void)argv;
+
+	d.ipcfd = ipc_create_server();
+
+	if (d.ipcfd < 0)
 		die("failed to create %s (another instance already running?)", SOCKET_PATH);
 
-	vkbd = vkbd_init(VKBD_NAME);
+	d.vkbd = vkbd_init(VKBD_NAME);
 
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	setvbuf(stderr, NULL, _IOLBF, 0);
@@ -642,14 +661,15 @@ int run_daemon(int argc, char *argv[])
 	}
 #endif /* !__APPLE__ */
 
-	evloop_add_fd(ipcfd);
+	evloop_add_fd(d.ipcfd);
 
-	reload();
-
+	g_daemon_ptr = &d;
 	atexit(cleanup);
 
+	reload(&d);
+
 	keyd_log("Starting keyd "VERSION"\n");
-	evloop(event_handler);
+	evloop(event_handler, &d);
 
 	return 0;
 }

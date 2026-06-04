@@ -68,11 +68,49 @@ union descriptor_arg {
 	int16_t sensitivity;
 };
 
+/*
+ * Named per-variant structs for struct descriptor.
+ * Each maps directly to one or more enum op values.
+ * All must fit within union descriptor_arg[MAX_DESCRIPTOR_ARGS] (6 bytes).
+ */
+struct desc_keysequence { uint8_t code; uint8_t mods; };            /* OP_KEYSEQUENCE */
+struct desc_layer        { int16_t idx; };                           /* OP_LAYER, OP_ONESHOT, OP_TOGGLE, OP_SWAP, OP_LAYOUT */
+struct desc_macro        { int16_t macro_idx; };                     /* OP_MACRO, OP_CLEARM */
+struct desc_command      { int16_t cmd_idx; };                       /* OP_COMMAND */
+struct desc_scroll       { int16_t sensitivity; };                   /* OP_SCROLL, OP_SCROLL_TOGGLE_ON, OP_SCROLL_TOGGLE */
+struct desc_layer_macro  { int16_t idx; int16_t macro_idx; };        /* OP_LAYERM, OP_SWAPM, OP_TOGGLEM, OP_ONESHOTM */
+struct desc_overload     { int16_t layer_idx; int16_t action_idx; }; /* OP_OVERLOAD, OP_ONESHOTK */
+struct desc_overload_to  { int16_t layer_idx; int16_t action_idx; uint16_t timeout; }; /* OP_OVERLOAD_TIMEOUT, OP_OVERLOAD_TIMEOUT_TAP */
+struct desc_overload_idle { int16_t action1_idx; int16_t action2_idx; uint16_t timeout; }; /* OP_OVERLOAD_IDLE_TIMEOUT */
+struct desc_timeout      { int16_t action1_idx; uint16_t timeout; int16_t action2_idx; }; /* OP_TIMEOUT */
+struct desc_macro2       { uint16_t delay; uint16_t interval; int16_t macro_idx; };   /* OP_MACRO2 */
+
+_Static_assert(sizeof(struct desc_keysequence)   <= sizeof(union descriptor_arg[MAX_DESCRIPTOR_ARGS]), "desc_keysequence too large");
+_Static_assert(sizeof(struct desc_layer_macro)   <= sizeof(union descriptor_arg[MAX_DESCRIPTOR_ARGS]), "desc_layer_macro too large");
+_Static_assert(sizeof(struct desc_overload)      <= sizeof(union descriptor_arg[MAX_DESCRIPTOR_ARGS]), "desc_overload too large");
+_Static_assert(sizeof(struct desc_overload_to)   <= sizeof(union descriptor_arg[MAX_DESCRIPTOR_ARGS]), "desc_overload_to too large");
+_Static_assert(sizeof(struct desc_overload_idle) <= sizeof(union descriptor_arg[MAX_DESCRIPTOR_ARGS]), "desc_overload_idle too large");
+_Static_assert(sizeof(struct desc_timeout)       <= sizeof(union descriptor_arg[MAX_DESCRIPTOR_ARGS]), "desc_timeout too large");
+_Static_assert(sizeof(struct desc_macro2)        <= sizeof(union descriptor_arg[MAX_DESCRIPTOR_ARGS]), "desc_macro2 too large");
+
 /* Describes the intended purpose of a key (corresponds to an 'action' in user parlance). */
 
 struct descriptor {
 	enum op op;
-	union descriptor_arg args[MAX_DESCRIPTOR_ARGS];
+	union {
+		struct desc_keysequence  keysequence;
+		struct desc_layer        layer;
+		struct desc_macro        macro_op;
+		struct desc_command      command;
+		struct desc_scroll       scroll;
+		struct desc_layer_macro  layer_macro;
+		struct desc_overload     overload;
+		struct desc_overload_to  overload_to;
+		struct desc_overload_idle overload_idle;
+		struct desc_timeout      timeout_op;
+		struct desc_macro2       macro2;
+		union descriptor_arg     args[MAX_DESCRIPTOR_ARGS]; /* raw access */
+	};
 };
 
 struct chord {

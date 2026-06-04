@@ -71,17 +71,17 @@ static uint8_t resolve_device_capabilities(int fd, uint32_t *num_keys, uint8_t *
 	};
 
 	if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof keymask), keymask) < 0) {
-		perror("ioctl");
+		err("ioctl EV_KEY: %s", strerror(errno));
 		return 0;
 	}
 
 	if (ioctl(fd, EVIOCGBIT(EV_ABS, 1), absmask) < 0) {
-		perror("ioctl");
+		err("ioctl EV_ABS: %s", strerror(errno));
 		return 0;
 	}
 
 	if (ioctl(fd, EVIOCGBIT(EV_REL, 1), relmask) < 0) {
-		perror("ioctl");
+		err("ioctl EV_REL: %s", strerror(errno));
 		return 0;
 	}
 
@@ -171,7 +171,7 @@ static int device_init(const char *path, struct device *dev)
 
 	if (capabilities & CAP_MOUSE_ABS) {
 		if (ioctl(fd, EVIOCGABS(ABS_X), &absinfo) < 0) {
-			perror("ioctl");
+			err("ioctl EVIOCGABS(ABS_X): %s", strerror(errno));
 			return -1;
 		}
 
@@ -179,7 +179,7 @@ static int device_init(const char *path, struct device *dev)
 		dev->_maxx = absinfo.maximum;
 
 		if (ioctl(fd, EVIOCGABS(ABS_Y), &absinfo) < 0) {
-			perror("ioctl");
+			err("ioctl EVIOCGABS(ABS_Y): %s", strerror(errno));
 			return -1;
 		}
 
@@ -193,7 +193,7 @@ static int device_init(const char *path, struct device *dev)
 		struct input_id info;
 
 		if (ioctl(fd, EVIOCGID, &info) == -1) {
-			perror("ioctl EVIOCGID");
+			err("ioctl EVIOCGID: %s", strerror(errno));
 			return -1;
 		}
 
@@ -212,7 +212,7 @@ static int device_init(const char *path, struct device *dev)
 
 		dev->fd = fd;
 		dev->capabilities = capabilities;
-		dev->data = NULL;
+		dev->kbd = NULL;
 		dev->grabbed = 0;
 
 		dev->is_virtual = info.vendor == 0x0FAC;
@@ -358,7 +358,7 @@ int device_grab(struct device *dev)
 		memset(state, 0, sizeof(state));
 
 		if (ioctl(dev->fd, EVIOCGKEY(sizeof state), state) < 0) {
-			perror("ioctl EVIOCGKEY");
+			err("ioctl EVIOCGKEY: %s", strerror(errno));
 			return -1;
 		}
 
@@ -380,7 +380,7 @@ int device_grab(struct device *dev)
 	}
 
 	if (ioctl(dev->fd, EVIOCGRAB, (void *) 1) < 0) {
-		perror("EVIOCGRAB");
+		err("EVIOCGRAB: %s", strerror(errno));
 		return -1;
 	}
 

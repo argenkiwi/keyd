@@ -30,9 +30,10 @@ static void cleanup(void)
 	set_tflags(ICANON|ECHO, 1);
 }
 
-int event_handler(struct event *ev)
+int event_handler(struct event *ev, void *ctx)
 {
 	static long last_time = 0;
+	(void)ctx;
 
 	switch (ev->type) {
 	const char *name;
@@ -105,7 +106,7 @@ int monitor(int argc, char *argv[])
 
 	atexit(cleanup);
 
-	evloop(event_handler);
+	evloop(event_handler, NULL);
 
 	return 0;
 }

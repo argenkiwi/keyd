@@ -34,7 +34,7 @@ static long get_time_ms(void)
 	return ts.tv_sec * 1E3 + ts.tv_nsec / 1E6;
 }
 
-int evloop(int (*event_handler) (struct event *ev))
+int evloop(int (*event_handler)(struct event *, void *), void *ctx)
 {
 	size_t i;
 	int timeout = 0;
@@ -51,7 +51,7 @@ int evloop(int (*event_handler) (struct event *ev))
 		ev.type = EV_DEV_ADD;
 		ev.dev = &device_table[i];
 
-		event_handler(&ev);
+		event_handler(&ev, ctx);
 	}
 
 	while (1) {
@@ -82,7 +82,7 @@ int evloop(int (*event_handler) (struct event *ev))
 			ev.type = EV_TIMEOUT;
 			ev.dev = NULL;
 			ev.devev = NULL;
-			timeout = event_handler(&ev);
+			timeout = event_handler(&ev, ctx);
 		} else {
 			timeout -= elapsed;
 		}
@@ -97,7 +97,7 @@ int evloop(int (*event_handler) (struct event *ev))
 						ev.type = EV_DEV_REMOVE;
 						ev.dev = dev;
 
-						timeout = event_handler(&ev);
+						timeout = event_handler(&ev, ctx);
 
 						dev->fd = -1;
 						removed = 1;
@@ -111,7 +111,7 @@ int evloop(int (*event_handler) (struct event *ev))
 						ev.devev = devev;
 						ev.dev = dev;
 
-						timeout = event_handler(&ev);
+						timeout = event_handler(&ev, ctx);
 					}
 				}
 			}
@@ -124,7 +124,7 @@ int evloop(int (*event_handler) (struct event *ev))
 				ev.type = events & POLLERR ? EV_FD_ERR : EV_FD_ACTIVITY;
 				ev.fd = aux_fds[i];
 
-				timeout = event_handler(&ev);
+				timeout = event_handler(&ev, ctx);
 			}
 		}
 
@@ -139,7 +139,7 @@ int evloop(int (*event_handler) (struct event *ev))
 				ev.type = EV_DEV_ADD;
 				ev.dev = &device_table[device_table_sz-1];
 
-				timeout = event_handler(&ev);
+				timeout = event_handler(&ev, ctx);
 			}
 		}
 

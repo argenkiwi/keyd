@@ -43,11 +43,10 @@
 
 #include "config.h"
 #include "macro.h"
-#include "device.h"
+#include "platform.h"
 #include "log.h"
 #include "keyboard.h"
 #include "keys.h"
-#include "vkbd.h"
 #include "string.h"
 
 #define MAX_IPC_MESSAGE_SIZE 4096
@@ -92,9 +91,6 @@ struct ipc_message {
 int check(int argc, char *argv[]);
 int monitor(int argc, char *argv[]);
 int run_daemon(int argc, char *argv[]);
-
-void evloop_add_fd(int fd);
-int evloop(int (*event_handler) (struct event *ev));
 
 void xwrite(int fd, const void *buf, size_t sz);
 void xread(int fd, void *buf, size_t sz);

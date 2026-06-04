@@ -8,6 +8,8 @@
 
 #include <stdint.h>
 
+struct keyboard;
+
 #define CAP_MOUSE	0x1
 #define CAP_MOUSE_ABS	0x2
 #define CAP_KEYBOARD	0x4
@@ -39,8 +41,8 @@ struct device {
 	uint32_t _pending_rel_x;
 	uint32_t _pending_rel_y;
 
-	/* Reserved for the user. */
-	void *data;
+	/* Pointer to the keyboard state managed by the daemon for this device. */
+	struct keyboard *kbd;
 };
 
 struct device_event {

@@ -35,8 +35,9 @@ static uint8_t lookup_code(const char *name)
 	return 0;
 }
 
-static void send_key(uint8_t code, uint8_t pressed)
+static void send_key(void *ctx, uint8_t code, uint8_t pressed)
 {
+	(void)ctx;
 	output[noutput].code = code;
 	output[noutput].pressed = pressed;
 	noutput++;
@@ -233,8 +234,9 @@ uint64_t run_test(struct keyboard *kbd, const char *path)
 	return time;
 }
 
-static void on_layer_change(const struct keyboard *kbd, const struct layer *layer, uint8_t active)
+static void on_layer_change(void *ctx, const struct keyboard *kbd, const struct layer *layer, uint8_t active)
 {
+	(void)ctx; (void)kbd; (void)layer; (void)active;
 }
 
 int main(int argc, char *argv[])
@@ -246,6 +248,7 @@ int main(int argc, char *argv[])
 	struct keyboard *kbd;
 
 	struct output output = {
+		.ctx = NULL,
 		.send_key = send_key,
 		.on_layer_change = on_layer_change,
 	};
