@@ -24,6 +24,6 @@ void die(const char *fmt, ...);
 
 extern int log_level;
 extern int suppress_colours;
-extern char errstr[2048];
+extern char errstr[8192];
 
 #endif

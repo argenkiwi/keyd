@@ -7,7 +7,7 @@
 #include <time.h>
 #include <pthread.h>
 
-char errstr[2048];
+char errstr[8192];
 
 static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
 
