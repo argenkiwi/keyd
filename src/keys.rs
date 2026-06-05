@@ -55,7 +55,7 @@ pub const KEYCODE_TABLE: [Option<KeyCodeTableEnt>; 256] = {
     table[26] = Some(KeyCodeTableEnt { name: "[", alt_name: Some("leftbrace"), shifted_name: Some("{") });
     table[27] = Some(KeyCodeTableEnt { name: "]", alt_name: Some("rightbrace"), shifted_name: Some("}") });
     table[28] = Some(KeyCodeTableEnt { name: "enter", alt_name: None, shifted_name: None });
-    table[29] = Some(KeyCodeTableEnt { name: "leftcontrol", alt_name: Some(""), shifted_name: None });
+    table[29] = Some(KeyCodeTableEnt { name: "leftcontrol", alt_name: None, shifted_name: None });
     table[84] = Some(KeyCodeTableEnt { name: "iso-level3-shift", alt_name: None, shifted_name: None });
     table[30] = Some(KeyCodeTableEnt { name: "a", alt_name: None, shifted_name: Some("A") });
     table[31] = Some(KeyCodeTableEnt { name: "s", alt_name: None, shifted_name: Some("S") });
@@ -69,7 +69,7 @@ pub const KEYCODE_TABLE: [Option<KeyCodeTableEnt>; 256] = {
     table[39] = Some(KeyCodeTableEnt { name: ";", alt_name: Some("semicolon"), shifted_name: Some(":") });
     table[40] = Some(KeyCodeTableEnt { name: "'", alt_name: Some("apostrophe"), shifted_name: Some("\"") });
     table[41] = Some(KeyCodeTableEnt { name: "`", alt_name: Some("grave"), shifted_name: Some("~") });
-    table[42] = Some(KeyCodeTableEnt { name: "leftshift", alt_name: Some(""), shifted_name: None });
+    table[42] = Some(KeyCodeTableEnt { name: "leftshift", alt_name: None, shifted_name: None });
     table[43] = Some(KeyCodeTableEnt { name: "\\", alt_name: Some("backslash"), shifted_name: Some("|") });
     table[44] = Some(KeyCodeTableEnt { name: "z", alt_name: None, shifted_name: Some("Z") });
     table[45] = Some(KeyCodeTableEnt { name: "x", alt_name: None, shifted_name: Some("X") });
@@ -83,7 +83,7 @@ pub const KEYCODE_TABLE: [Option<KeyCodeTableEnt>; 256] = {
     table[53] = Some(KeyCodeTableEnt { name: "/", alt_name: Some("slash"), shifted_name: Some("?") });
     table[54] = Some(KeyCodeTableEnt { name: "rightshift", alt_name: None, shifted_name: None });
     table[55] = Some(KeyCodeTableEnt { name: "kpasterisk", alt_name: None, shifted_name: None });
-    table[56] = Some(KeyCodeTableEnt { name: "leftalt", alt_name: Some(""), shifted_name: None });
+    table[56] = Some(KeyCodeTableEnt { name: "leftalt", alt_name: None, shifted_name: None });
     table[57] = Some(KeyCodeTableEnt { name: "space", alt_name: None, shifted_name: None });
     table[58] = Some(KeyCodeTableEnt { name: "capslock", alt_name: None, shifted_name: None });
     table[59] = Some(KeyCodeTableEnt { name: "f1", alt_name: None, shifted_name: None });
@@ -151,7 +151,7 @@ pub const KEYCODE_TABLE: [Option<KeyCodeTableEnt>; 256] = {
     table[122] = Some(KeyCodeTableEnt { name: "hangeul", alt_name: None, shifted_name: None });
     table[123] = Some(KeyCodeTableEnt { name: "hanja", alt_name: None, shifted_name: None });
     table[124] = Some(KeyCodeTableEnt { name: "yen", alt_name: None, shifted_name: None });
-    table[125] = Some(KeyCodeTableEnt { name: "leftmeta", alt_name: Some(""), shifted_name: None });
+    table[125] = Some(KeyCodeTableEnt { name: "leftmeta", alt_name: None, shifted_name: None });
     table[126] = Some(KeyCodeTableEnt { name: "rightmeta", alt_name: None, shifted_name: None });
     table[127] = Some(KeyCodeTableEnt { name: "compose", alt_name: None, shifted_name: None });
     table[128] = Some(KeyCodeTableEnt { name: "stop", alt_name: None, shifted_name: None });
@@ -282,9 +282,29 @@ pub const KEYCODE_TABLE: [Option<KeyCodeTableEnt>; 256] = {
     table
 };
 
+pub fn lookup_keycode(name: &str) -> Option<u8> {
+    match name {
+        "control" => return Some(29), // KEYD_LEFTCTRL
+        "shift" => return Some(42),   // KEYD_LEFTSHIFT
+        "meta" => return Some(125),  // KEYD_LEFTMETA
+        "alt" => return Some(56),    // KEYD_LEFTALT
+        "altgr" => return Some(100), // KEYD_RIGHTALT
+        _ => {}
+    }
+
+    for (i, ent) in KEYCODE_TABLE.iter().enumerate() {
+        if let Some(ent) = ent {
+            if ent.name == name || ent.alt_name == Some(name) {
+                return Some(i as u8);
+            }
+        }
+    }
+    None
+}
+
 pub fn parse_modset(s: &str) -> Option<u8> {
     let mut mods = 0;
-    let mut parts = s.split('-');
+    let parts = s.split('-');
     
     for part in parts {
         if part.is_empty() {

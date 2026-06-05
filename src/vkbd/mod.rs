@@ -6,3 +6,24 @@ pub trait VirtualKeyboard: Send + Sync {
     fn mouse_scroll(&self, x: i32, y: i32);
     fn mouse_move_abs(&self, x: i32, y: i32);
 }
+
+pub struct MockVirtualKeyboard {
+    pub events: std::sync::Mutex<Vec<(u8, i32)>>,
+}
+
+impl MockVirtualKeyboard {
+    pub fn new() -> Self {
+        Self {
+            events: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl VirtualKeyboard for MockVirtualKeyboard {
+    fn send_key(&self, code: u8, state: i32) {
+        self.events.lock().unwrap().push((code, state));
+    }
+    fn mouse_move(&self, _x: i32, _y: i32) {}
+    fn mouse_scroll(&self, _x: i32, _y: i32) {}
+    fn mouse_move_abs(&self, _x: i32, _y: i32) {}
+}

@@ -1,4 +1,4 @@
-use evdev::{Device, EventType, KeyCode};
+use evdev::{Device, KeyCode};
 use nix::sys::inotify::{Inotify, InitFlags, AddWatchFlags};
 use std::collections::HashMap;
 use std::fs;

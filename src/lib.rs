@@ -2,6 +2,9 @@ pub mod keys;
 pub mod unicode;
 pub mod vkbd;
 pub mod device;
+pub mod config;
+pub mod keyboard;
+pub mod ipc;
 
 use serde::{Serialize, Deserialize};
 
@@ -30,6 +33,7 @@ pub enum Op {
     Macro2 { delay: u16, interval: u16, macro_idx: usize },
     Command { cmd_idx: usize },
     Timeout { action1_idx: usize, timeout: u16, action2_idx: usize },
+    Unicode { codepoint: u32 },
     ScrollToggleOn { sensitivity: i16 },
     ScrollToggleOff,
     ScrollToggle { sensitivity: i16 },
@@ -96,6 +100,29 @@ pub struct Config {
     pub layer_indicator: bool,
     pub disable_modifier_guard: bool,
     pub default_layout: String,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            layers: Vec::new(),
+            descriptors: Vec::new(),
+            macros: Vec::new(),
+            commands: Vec::new(),
+            aliases: vec![String::new(); 256],
+            macro_timeout: 600,
+            macro_sequence_timeout: 0,
+            macro_repeat_timeout: 50,
+            oneshot_timeout: 800,
+            overload_tap_timeout: 0,
+            chord_interkey_timeout: 50,
+            chord_hold_timeout: 0,
+            layer_indicator: false,
+            disable_modifier_guard: false,
+            default_layout: String::new(),
+        }
+    }
 }
 
 impl Default for Layer {

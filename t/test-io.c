@@ -220,6 +220,9 @@ uint64_t run_test(struct keyboard *kbd, const char *path)
 	noutput = 0;
 
 	time = get_time_ns();
+	for (size_t j = 0; j < ninput; j++) {
+		printf("Input event: code=%d, pressed=%d\n", input[j].code, input[j].pressed);
+	}
 	kbd_process_events(kbd, input, ninput);
 	time = get_time_ns()-time;
 
