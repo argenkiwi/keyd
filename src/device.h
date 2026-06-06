@@ -17,10 +17,13 @@
 
 struct device {
 	/*
-	 * A file descriptor that can be used to monitor events subsequently read with
-	 * device_read_event().
+	 * A file descriptor or platform-specific handle that can be used to monitor
+	 * events subsequently read with device_read_event().
 	 */
-	int fd;
+	union {
+		int fd;
+		void *handle;
+	};
 
 	uint8_t grabbed;
 	uint8_t capabilities;
@@ -41,6 +44,9 @@ struct device {
 
 	/* Reserved for the user. */
 	void *data;
+
+	/* Reserved for the platform implementation. */
+	void *platform_data;
 };
 
 struct device_event {

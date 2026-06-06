@@ -225,7 +225,7 @@ static void write_key_event(const struct vkbd *vkbd, uint8_t code, int state)
 	pthread_mutex_unlock(&mtx);
 }
 
-struct vkbd *vkbd_init(const char *name)
+struct vkbd *uinput_vkbd_init(const char *name)
 {
 	pthread_t tid;
 
@@ -236,7 +236,7 @@ struct vkbd *vkbd_init(const char *name)
 	return vkbd;
 }
 
-void vkbd_mouse_move(const struct vkbd *vkbd, int x, int y)
+void uinput_vkbd_mouse_move(const struct vkbd *vkbd, int x, int y)
 {
 	struct input_event ev;
 
@@ -269,7 +269,7 @@ void vkbd_mouse_move(const struct vkbd *vkbd, int x, int y)
 	xwrite(vkbd->pfd, &ev, sizeof(ev));
 }
 
-void vkbd_mouse_scroll(const struct vkbd *vkbd, int x, int y)
+void uinput_vkbd_mouse_scroll(const struct vkbd *vkbd, int x, int y)
 {
 	struct input_event ev;
 
@@ -298,7 +298,7 @@ void vkbd_mouse_scroll(const struct vkbd *vkbd, int x, int y)
 	xwrite(vkbd->pfd, &ev, sizeof(ev));
 }
 
-void vkbd_mouse_move_abs(const struct vkbd *vkbd, int x, int y)
+void uinput_vkbd_mouse_move_abs(const struct vkbd *vkbd, int x, int y)
 {
 	struct input_event ev;
 
@@ -331,14 +331,14 @@ void vkbd_mouse_move_abs(const struct vkbd *vkbd, int x, int y)
 	xwrite(vkbd->pfd, &ev, sizeof(ev));
 }
 
-void vkbd_send_key(const struct vkbd *vkbd, uint8_t code, int state)
+void uinput_vkbd_send_key(const struct vkbd *vkbd, uint8_t code, int state)
 {
 	dbg("output %s %s", KEY_NAME(code), state == 1 ? "down" : "up");
 
 	write_key_event(vkbd, code, state);
 }
 
-void free_vkbd(struct vkbd *vkbd)
+void uinput_free_vkbd(struct vkbd *vkbd)
 {
 	if (vkbd) {
 		close(vkbd->fd);

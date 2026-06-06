@@ -7,9 +7,6 @@
 static int aux_fds[MAX_AUX_FDS];
 static size_t nr_aux_fds = 0;
 
-struct device device_table[MAX_DEVICES];
-size_t device_table_sz;
-
 static void panic_check(uint8_t code, uint8_t pressed)
 {
 	static uint8_t enter, backspace, escape;
@@ -29,7 +26,7 @@ static void panic_check(uint8_t code, uint8_t pressed)
 		die("panic sequence detected");
 }
 
-int evloop(int (*event_handler) (struct event *ev))
+int linux_evloop(int (*event_handler) (struct event *ev))
 {
 	size_t i;
 	int timeout = 0;
@@ -152,7 +149,7 @@ int evloop(int (*event_handler) (struct event *ev))
 	return 0;
 }
 
-void evloop_add_fd(int fd)
+void linux_evloop_add_fd(int fd)
 {
 	assert(nr_aux_fds < MAX_AUX_FDS);
 	aux_fds[nr_aux_fds++] = fd;

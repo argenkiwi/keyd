@@ -35,17 +35,22 @@ static const struct platform linux_platform = {
 	.set_realtime = linux_set_realtime,
 	.lock_memory = linux_lock_memory,
 
-	.device_scan = device_scan,
-	.device_grab = device_grab,
-	.device_ungrab = device_ungrab,
-	.device_set_led = device_set_led,
+	.device_scan = linux_device_scan,
+	.device_grab = linux_device_grab,
+	.device_ungrab = linux_device_ungrab,
+	.device_set_led = linux_device_set_led,
 
-	.evloop_add_fd = evloop_add_fd,
-	.evloop = evloop,
+	.evloop_add_fd = linux_evloop_add_fd,
+	.evloop = linux_evloop,
 
-	.device_read_event = device_read_event,
+	.device_read_event = linux_device_read_event,
 
-	.vkbd_init = vkbd_init,
+	.vkbd_init = uinput_vkbd_init,
+	.vkbd_send_key = uinput_vkbd_send_key,
+	.vkbd_mouse_move = uinput_vkbd_mouse_move,
+	.vkbd_mouse_move_abs = uinput_vkbd_mouse_move_abs,
+	.vkbd_mouse_scroll = uinput_vkbd_mouse_scroll,
+	.free_vkbd = uinput_free_vkbd,
 
 	.ipc_create_server = ipc_create_server,
 	.ipc_connect = ipc_connect,

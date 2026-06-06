@@ -29,7 +29,7 @@ ifeq ($(platform), Linux)
 	COMPAT_FILES=src/platform/linux/*.c
 else ifeq ($(platform), Darwin)
 	COMPAT_FILES=src/platform/macos/*.c
-	LDFLAGS+=-framework IOKit -framework CoreFoundation
+	LDFLAGS+=-framework IOKit -framework CoreFoundation -framework ApplicationServices
 else
 	LDFLAGS+=-linotify
 	COMPAT_FILES=src/platform/linux/*.c

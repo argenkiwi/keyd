@@ -98,14 +98,14 @@ int monitor(int argc, char *argv[])
 
 	/* If stdout is a process, terminate on pipe closures. */
 	if (st.st_mode & S_IFIFO)
-		evloop_add_fd(1);
+		platform->evloop_add_fd(1);
 
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	setvbuf(stderr, NULL, _IOLBF, 0);
 
 	atexit(cleanup);
 
-	evloop(event_handler);
+	platform->evloop(event_handler);
 
 	return 0;
 }

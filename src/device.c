@@ -245,7 +245,7 @@ static void *device_scan_worker(void *arg)
 	return &w->dev;
 }
 
-int device_scan(struct device devices[MAX_DEVICES])
+int linux_device_scan(struct device devices[MAX_DEVICES])
 {
 	int i;
 	struct device_worker workers[MAX_DEVICES];
@@ -343,7 +343,7 @@ int devmon_read_device(int fd, struct device *dev)
 	}
 }
 
-int device_grab(struct device *dev)
+int linux_device_grab(struct device *dev)
 {
 	size_t i;
 	struct input_event ev;
@@ -397,7 +397,7 @@ int device_grab(struct device *dev)
 	return 0;
 }
 
-int device_ungrab(struct device *dev)
+int linux_device_ungrab(struct device *dev)
 {
 	if (!dev->grabbed)
 		return 0;
@@ -415,7 +415,7 @@ int device_ungrab(struct device *dev)
  * NULL if none are available (may happen in the
  * case of a spurious wakeup).
  */
-struct device_event *device_read_event(struct device *dev)
+struct device_event *linux_device_read_event(struct device *dev)
 {
 	struct input_event ev;
 	static struct device_event devev;
@@ -636,7 +636,7 @@ struct device_event *device_read_event(struct device *dev)
 	return &devev;
 }
 
-void device_set_led(const struct device *dev, int led, int state)
+void linux_device_set_led(const struct device *dev, int led, int state)
 {
 	struct input_event ev = {
 		.type = EV_LED,
@@ -646,4 +646,5 @@ void device_set_led(const struct device *dev, int led, int state)
 
 	xwrite(dev->fd, &ev, sizeof ev);
 }
+
 #endif

@@ -16,31 +16,31 @@
 
 struct vkbd {};
 
-struct vkbd *vkbd_init(const char *name)
+struct vkbd *stdout_vkbd_init(const char *name)
 {
 	return NULL;
 }
 
-void vkbd_mouse_scroll(const struct vkbd *vkbd, int x, int y)
+void stdout_vkbd_mouse_scroll(const struct vkbd *vkbd, int x, int y)
 {
 	printf("mouse scroll: x: %d, y: %d\n", x, y);
 }
 
-void vkbd_mouse_move(const struct vkbd *vkbd, int x, int y)
+void stdout_vkbd_mouse_move(const struct vkbd *vkbd, int x, int y)
 {
 	printf("mouse movement: x: %d, y: %d\n", x, y);
 }
 
-void vkbd_mouse_move_abs(const struct vkbd *vkbd, int x, int y)
+void stdout_vkbd_mouse_move_abs(const struct vkbd *vkbd, int x, int y)
 {
 	printf("absolute mouse movement: x: %d, y: %d\n", x, y);
 }
 
-void vkbd_send_key(const struct vkbd *vkbd, uint8_t code, int state)
+void stdout_vkbd_send_key(const struct vkbd *vkbd, uint8_t code, int state)
 {
 	printf("key: %s, state: %d\n", keycode_table[code].name, state);
 }
 
-void free_vkbd(struct vkbd *vkbd)
+void stdout_free_vkbd(struct vkbd *vkbd)
 {
 }
