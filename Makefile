@@ -14,6 +14,7 @@ CFLAGS:=-DVERSION=\"v$(VERSION)\ \($(COMMIT)\)\" \
 	-Wextra \
 	-Wstrict-prototypes \
 	-Wno-unused \
+	-Wno-unused-parameter \
 	-std=c11 \
 	-DSOCKET_PATH=\"$(SOCKET_PATH)\" \
 	-DCONFIG_DIR=\"$(CONFIG_DIR)\" \
@@ -27,18 +28,21 @@ platform=$(shell uname -s)
 
 ifeq ($(platform), Linux)
 	COMPAT_FILES=src/platform/linux/*.c
+	VKBD_FILE=src/vkbd/$(VKBD).c
 else ifeq ($(platform), Darwin)
 	COMPAT_FILES=src/platform/macos/*.c
 	LDFLAGS+=-framework IOKit -framework CoreFoundation -framework ApplicationServices
+	VKBD_FILE=
 else
 	LDFLAGS+=-linotify
 	COMPAT_FILES=src/platform/linux/*.c
+	VKBD_FILE=src/vkbd/$(VKBD).c
 endif
 
 all:
 	mkdir -p bin
 	cp scripts/keyd-application-mapper bin/
-	$(CC) $(CFLAGS) -O3 $(COMPAT_FILES) src/platform/common/*.c src/*.c src/vkbd/$(VKBD).c -lpthread -o bin/keyd $(LDFLAGS)
+	$(CC) $(CFLAGS) -O3 $(COMPAT_FILES) src/platform/common/*.c src/*.c $(VKBD_FILE) -lpthread -o bin/keyd $(LDFLAGS)
 debug:
 	CFLAGS="-g -fsanitize=address -Wunused" $(MAKE)
 compose:

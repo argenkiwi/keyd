@@ -194,6 +194,7 @@ static void macos_evloop_add_fd(int fd)
 static void fd_callback(CFFileDescriptorRef fdref, CFOptionFlags callBackTypes, void *info)
 {
 	int fd = (int)(long)info;
+	(void)callBackTypes;
 	struct event ev = {
 		.type = EV_FD_ACTIVITY,
 		.fd = fd,
@@ -206,6 +207,10 @@ static void fd_callback(CFFileDescriptorRef fdref, CFOptionFlags callBackTypes, 
 
 static void hid_input_callback(void *context, IOReturn result, void *sender, IOHIDValueRef value)
 {
+	(void)context;
+	(void)result;
+	(void)sender;
+
 	IOHIDElementRef element = IOHIDValueGetElement(value);
 	IOHIDDeviceRef device_ref = IOHIDElementGetDevice(element);
 	
@@ -269,7 +274,8 @@ static int macos_evloop(int (*event_handler) (struct event *ev))
 	}
 
 	for (int i = 0; i < nr_aux_fds; i++) {
-		CFFileDescriptorRef fdref = CFFileDescriptorCreate(kCFAllocatorDefault, aux_fds[i], false, fd_callback, (void *)(long)aux_fds[i]);
+		CFFileDescriptorContext ctx = { .version = 0, .info = (void *)(long)aux_fds[i] };
+		CFFileDescriptorRef fdref = CFFileDescriptorCreate(kCFAllocatorDefault, aux_fds[i], false, fd_callback, &ctx);
 		CFFileDescriptorEnableCallBacks(fdref, kCFFileDescriptorReadCallBack);
 		CFRunLoopSourceRef source = CFFileDescriptorCreateRunLoopSource(kCFAllocatorDefault, fdref, 0);
 		CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopDefaultMode);
