@@ -74,32 +74,27 @@ static CGEventFlags modifier_flag_bit(uint16_t cgkey)
 	case 0x3A: case 0x3D: return kCGEventFlagMaskAlternate;
 	case 0x37: case 0x36: return kCGEventFlagMaskCommand;
 	case 0x39:            return kCGEventFlagMaskAlphaShift;
-	case 0x3F:            return kCGEventFlagMaskSecondaryFn;
 	default:              return 0;
 	}
 }
 
 static int flags_changed_pressed(uint16_t cgkey, CGEventFlags new_flags)
 {
-	int pressed;
-
 	if (cgkey >= 128)
 		return 0;
 
 	CGEventFlags bit = modifier_flag_bit(cgkey);
+	if (!bit)
+		return 0;
 
-	if (bit) {
-		int flag_set = (new_flags & bit) != 0;
-		int was_down = s_mod_down[cgkey];
-		/*
-		 * Press:   flag just became set AND we weren't tracking this key
-		 *          (handles simultaneous L/R modifiers of the same type).
-		 * Release: anything else (flag cleared, or key was already tracked).
-		 */
-		pressed = (flag_set && !was_down) ? 1 : 0;
-	} else {
-		pressed = !s_mod_down[cgkey];
-	}
+	int flag_set = (new_flags & bit) != 0;
+	int was_down = s_mod_down[cgkey];
+	/*
+	 * Press:   flag just became set AND we weren't tracking this key
+	 *          (handles simultaneous L/R modifiers of the same type).
+	 * Release: anything else (flag cleared, or key was already tracked).
+	 */
+	int pressed = (flag_set && !was_down) ? 1 : 0;
 
 	s_mod_down[cgkey] = (uint8_t)pressed;
 	return pressed;

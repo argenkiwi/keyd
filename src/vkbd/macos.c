@@ -42,7 +42,6 @@ static CGEventFlags modifier_flags_for_cgkey(uint16_t cgkey)
 	case 0x3A: case 0x3D: return kCGEventFlagMaskAlternate;
 	case 0x37: case 0x36: return kCGEventFlagMaskCommand;
 	case 0x39:            return kCGEventFlagMaskAlphaShift;
-	case 0x3F:            return kCGEventFlagMaskSecondaryFn;
 	default:              return 0;
 	}
 }
@@ -57,6 +56,35 @@ static CGEventFlags get_active_flags(const struct vkbd *vkbd)
 		}
 	}
 	return flags;
+}
+
+/*
+ * Merge keyd's tracked modifier state into the event flags.
+ *
+ * CGEventCreateKeyboardEvent(NULL, key, …) sets key-code-specific flags that
+ * must be preserved on key-down so that macOS recognises the key correctly:
+ *   - kCGEventFlagMaskNumericPad  — numpad keys and arrow keys
+ *   - kCGEventFlagMaskSecondaryFn — arrow keys and function keys
+ *
+ * On key-up these bits must be cleared.  Arrow key events carry SecondaryFn
+ * in both their down and up default flags; leaving it on the up event causes
+ * the system to believe Fn is still held after the key is released.  The
+ * kCGEventFlagsChanged sent for the accompanying modifier release then
+ * carries the corrected state (SecFn = 0) and clears the system flag.
+ */
+static void set_event_flags(CGEventRef ev, const struct vkbd *vkbd, int pressed)
+{
+	CGEventFlags flags = CGEventGetFlags(ev);
+	CGEventFlags mask = kCGEventFlagMaskShift     |
+	                    kCGEventFlagMaskControl   |
+	                    kCGEventFlagMaskAlternate |
+	                    kCGEventFlagMaskCommand   |
+	                    kCGEventFlagMaskAlphaShift;
+	if (!pressed)
+		mask |= kCGEventFlagMaskSecondaryFn | kCGEventFlagMaskNumericPad;
+	flags &= ~mask;
+	flags |= get_active_flags(vkbd);
+	CGEventSetFlags(ev, flags);
 }
 
 /* -------------------------------------------------------------------------
@@ -80,7 +108,6 @@ static int is_modifier_cgkey(uint16_t cgkey)
 	case 0x3B: case 0x3E: /* left/right control */
 	case 0x3A: case 0x3D: /* left/right option */
 	case 0x37: case 0x36: /* left/right command */
-	case 0x3F:            /* fn */
 	case 0x39:            /* caps lock */
 		return 1;
 	default:
@@ -114,7 +141,7 @@ static void post_key_repeat(const struct vkbd *vkbd, uint16_t cgkey)
 	CGEventRef ev = CGEventCreateKeyboardEvent(NULL, (CGKeyCode)cgkey, true);
 	if (!ev)
 		return;
-	CGEventSetFlags(ev, get_active_flags(vkbd));
+	set_event_flags(ev, vkbd, 1);
 	CGEventSetIntegerValueField(ev, kCGKeyboardEventAutorepeat, 1);
 	CGEventSetIntegerValueField(ev, kCGEventSourceUserData, KEYD_EVENT_MARKER);
 	CGEventPost(kCGHIDEventTap, ev);
@@ -182,14 +209,23 @@ void free_vkbd(struct vkbd *vkbd)
  * Key injection
  * ---------------------------------------------------------------------- */
 
-static void post_key(uint16_t cgkey, int pressed, CGEventFlags flags)
+static void post_key(const struct vkbd *vkbd, uint16_t cgkey, int pressed)
 {
 	CGEventRef ev = CGEventCreateKeyboardEvent(NULL, (CGKeyCode)cgkey,
 	                                           pressed ? true : false);
 	if (!ev)
 		return;
 
-	CGEventSetFlags(ev, flags);
+	/*
+	 * Real keyboards send kCGEventFlagsChanged for modifier keys, not
+	 * kCGEventKeyDown/kCGEventKeyUp.  Using the correct event type ensures
+	 * the system global modifier state is updated on both press and release.
+	 * Without this, released modifiers can linger in the system state.
+	 */
+	if (is_modifier_cgkey(cgkey))
+		CGEventSetType(ev, kCGEventFlagsChanged);
+
+	set_event_flags(ev, vkbd, pressed);
 	CGEventSetIntegerValueField(ev, kCGEventSourceUserData, KEYD_EVENT_MARKER);
 	CGEventPost(kCGHIDEventTap, ev);
 	CFRelease(ev);
@@ -229,7 +265,7 @@ void vkbd_send_key(const struct vkbd *vkbd, uint8_t code, int state)
 
 			CGEventRef ev = CGEventCreateMouseEvent(NULL, btn_type, pos, btn_num);
 			if (ev) {
-				CGEventSetFlags(ev, get_active_flags(vkbd));
+				set_event_flags(ev, vkbd, state);
 				CGEventSetIntegerValueField(ev, kCGEventSourceUserData,
 				                            KEYD_EVENT_MARKER);
 				CGEventPost(kCGHIDEventTap, ev);
@@ -250,7 +286,7 @@ void vkbd_send_key(const struct vkbd *vkbd, uint8_t code, int state)
 		v->key_states[cgkey] = (uint8_t)state;
 	}
 
-	post_key(cgkey, state, get_active_flags(vkbd));
+	post_key(vkbd, cgkey, state);
 
 	/* Arm or cancel the software repeat timer for non-modifier keys. */
 	if (!is_modifier_cgkey(cgkey)) {
@@ -285,7 +321,7 @@ void vkbd_mouse_move(const struct vkbd *vkbd, int x, int y)
 	CGEventRef ev = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved,
 	                                         pos, kCGMouseButtonLeft);
 	if (ev) {
-		CGEventSetFlags(ev, get_active_flags(vkbd));
+		set_event_flags(ev, vkbd, 0);
 		CGEventSetIntegerValueField(ev, kCGEventSourceUserData,
 		                            KEYD_EVENT_MARKER);
 		CGEventPost(kCGHIDEventTap, ev);
@@ -310,7 +346,7 @@ void vkbd_mouse_move_abs(const struct vkbd *vkbd, int x, int y)
 	CGEventRef ev = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved,
 	                                         pos, kCGMouseButtonLeft);
 	if (ev) {
-		CGEventSetFlags(ev, get_active_flags(vkbd));
+		set_event_flags(ev, vkbd, 0);
 		CGEventSetIntegerValueField(ev, kCGEventSourceUserData,
 		                            KEYD_EVENT_MARKER);
 		CGEventPost(kCGHIDEventTap, ev);
@@ -338,7 +374,7 @@ void vkbd_mouse_scroll(const struct vkbd *vkbd, int x, int y)
 	    0);
 
 	if (ev) {
-		CGEventSetFlags(ev, get_active_flags(vkbd));
+		set_event_flags(ev, vkbd, 0);
 		CGEventSetIntegerValueField(ev, kCGEventSourceUserData,
 		                            KEYD_EVENT_MARKER);
 		CGEventPost(kCGHIDEventTap, ev);
