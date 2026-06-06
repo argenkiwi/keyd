@@ -1,4 +1,4 @@
-.PHONY: all clean install uninstall debug man compose test-harness test test-io help
+.PHONY: all clean install uninstall debug man compose test-harness test test-io test-config test-unit help
 VERSION=2.6.0
 COMMIT=$(shell git describe --no-match --always --abbrev=7 --dirty)
 PREFIX?=/usr/local
@@ -33,7 +33,8 @@ CFLAGS:=-DVERSION=\"v$(VERSION)\ \($(COMMIT)\)\" \
 	$(CFLAGS)
 
 # Core sources shared across all platforms (no Linux/macOS-specific I/O).
-CORE_SRCS = src/keyd.c src/daemon.c src/keyboard.c src/config.c src/keys.c \
+CORE_SRCS = src/keyd.c src/daemon.c src/keyboard.c src/config.c \
+            src/config_parse.c src/keys.c \
             src/ipc.c src/macro.c src/unicode.c src/log.c src/string.c \
             src/ini.c src/check.c src/monitor.c src/util.c src/dbg.c
 
@@ -133,11 +134,30 @@ test-io:
 			src/string.c \
 			src/macro.c \
 			src/config.c \
+			src/config_parse.c \
 			src/log.c \
 			src/ini.c \
 			src/keys.c    \
 			src/unicode.c && \
 	./bin/test-io t/test.conf t/*.t
+
+test-config:
+	mkdir -p bin
+	$(CC) \
+		-DDATA_DIR=\"\" \
+		-o bin/test-config \
+			t/test-config.c \
+			src/config.c \
+			src/config_parse.c \
+			src/string.c \
+			src/macro.c \
+			src/log.c \
+			src/ini.c \
+			src/keys.c \
+			src/unicode.c && \
+	./bin/test-config
+
+test-unit: test-io test-config
 
 help:
 	@echo "Usage: make <target> [VAR=value ...]"
@@ -148,7 +168,9 @@ help:
 	@echo "  man       Build man pages from .scdoc sources (requires scdoc)"
 	@echo "  compose   Generate X compose table (data/keyd.compose)"
 	@echo "  test      Run integration test suite (requires root)"
-	@echo "  test-io   Run unit tests (keyboard logic, no root needed)"
+	@echo "  test-io     Run keyboard-logic unit tests (no root needed)"
+	@echo "  test-config Run config-parsing unit tests (no root needed)"
+	@echo "  test-unit   Run all unit tests: test-io + test-config"
 	@echo "  install   Install to PREFIX [=/usr/local]"
 	@echo "  uninstall Remove installed files"
 	@echo "  clean     Remove build artifacts (bin/, keyd.service)"

@@ -627,9 +627,16 @@ int run_daemon(int argc, char *argv[])
 #ifndef __APPLE__
 	struct sched_param sp;
 #endif
+	const char *log_fmt_env;
 
 	(void)argc;
 	(void)argv;
+
+	log_fmt_env = getenv("KEYD_LOG_FORMAT");
+	if (log_fmt_env && strcmp(log_fmt_env, "json") == 0) {
+		log_format = LOG_FORMAT_JSON;
+		suppress_colours = 1;
+	}
 
 	d.ipcfd = ipc_create_server();
 

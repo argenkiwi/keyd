@@ -196,6 +196,7 @@ struct config {
 };
 
 int config_parse(struct config *config, const char *path);
+int config_parse_string(struct config *config, const char *content);
 int config_add_entry(struct config *config, const char *exp);
 int config_get_layer_index(const struct config *config, const char *name);
 
