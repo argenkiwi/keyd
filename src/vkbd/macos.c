@@ -31,8 +31,33 @@
 #define KEYD_EVENT_MARKER ((int64_t)0x6B657964ULL)
 
 struct vkbd {
-	int _dummy; /* CGEventPost needs no persistent device handle */
+	uint8_t key_states[128];
 };
+
+static CGEventFlags modifier_flags_for_cgkey(uint16_t cgkey)
+{
+	switch (cgkey) {
+	case 0x38: case 0x3C: return kCGEventFlagMaskShift;
+	case 0x3B: case 0x3E: return kCGEventFlagMaskControl;
+	case 0x3A: case 0x3D: return kCGEventFlagMaskAlternate;
+	case 0x37: case 0x36: return kCGEventFlagMaskCommand;
+	case 0x39:            return kCGEventFlagMaskAlphaShift;
+	case 0x3F:            return kCGEventFlagMaskSecondaryFn;
+	default:              return 0;
+	}
+}
+
+static CGEventFlags get_active_flags(const struct vkbd *vkbd)
+{
+	CGEventFlags flags = 0;
+	int i;
+	for (i = 0; i < 128; i++) {
+		if (vkbd->key_states[i]) {
+			flags |= modifier_flags_for_cgkey(i);
+		}
+	}
+	return flags;
+}
 
 /* -------------------------------------------------------------------------
  * Software key repeat
@@ -84,11 +109,12 @@ static void sleep_ms(long ms)
 	nanosleep(&ts, NULL);
 }
 
-static void post_key_repeat(uint16_t cgkey)
+static void post_key_repeat(const struct vkbd *vkbd, uint16_t cgkey)
 {
 	CGEventRef ev = CGEventCreateKeyboardEvent(NULL, (CGKeyCode)cgkey, true);
 	if (!ev)
 		return;
+	CGEventSetFlags(ev, get_active_flags(vkbd));
 	CGEventSetIntegerValueField(ev, kCGKeyboardEventAutorepeat, 1);
 	CGEventSetIntegerValueField(ev, kCGEventSourceUserData, KEYD_EVENT_MARKER);
 	CGEventPost(kCGHIDEventTap, ev);
@@ -97,8 +123,8 @@ static void post_key_repeat(uint16_t cgkey)
 
 static void *repeat_thread_fn(void *arg)
 {
+	const struct vkbd *vkbd = (const struct vkbd *)arg;
 	long delay_ms, interval_ms;
-	(void)arg;
 	get_repeat_settings(&delay_ms, &interval_ms);
 
 	for (;;) {
@@ -127,7 +153,7 @@ static void *repeat_thread_fn(void *arg)
 			if (cancelled)
 				break;
 
-			post_key_repeat(key);
+			post_key_repeat(vkbd, key);
 			sleep_ms(interval_ms);
 		}
 	}
@@ -140,7 +166,7 @@ struct vkbd *vkbd_init(const char *name)
 	struct vkbd *v = calloc(1, sizeof *v);
 
 	pthread_t tid;
-	pthread_create(&tid, NULL, repeat_thread_fn, NULL);
+	pthread_create(&tid, NULL, repeat_thread_fn, v);
 	pthread_detach(tid);
 	s_repeat_tid = tid;
 
@@ -156,13 +182,14 @@ void free_vkbd(struct vkbd *vkbd)
  * Key injection
  * ---------------------------------------------------------------------- */
 
-static void post_key(uint16_t cgkey, int pressed)
+static void post_key(uint16_t cgkey, int pressed, CGEventFlags flags)
 {
 	CGEventRef ev = CGEventCreateKeyboardEvent(NULL, (CGKeyCode)cgkey,
 	                                           pressed ? true : false);
 	if (!ev)
 		return;
 
+	CGEventSetFlags(ev, flags);
 	CGEventSetIntegerValueField(ev, kCGEventSourceUserData, KEYD_EVENT_MARKER);
 	CGEventPost(kCGHIDEventTap, ev);
 	CFRelease(ev);
@@ -170,8 +197,6 @@ static void post_key(uint16_t cgkey, int pressed)
 
 void vkbd_send_key(const struct vkbd *vkbd, uint8_t code, int state)
 {
-	(void)vkbd;
-
 	dbg("output %s %s", KEY_NAME(code), state ? "down" : "up");
 
 	/* Route mouse button codes through CGEventPost with button event types. */
@@ -204,6 +229,7 @@ void vkbd_send_key(const struct vkbd *vkbd, uint8_t code, int state)
 
 			CGEventRef ev = CGEventCreateMouseEvent(NULL, btn_type, pos, btn_num);
 			if (ev) {
+				CGEventSetFlags(ev, get_active_flags(vkbd));
 				CGEventSetIntegerValueField(ev, kCGEventSourceUserData,
 				                            KEYD_EVENT_MARKER);
 				CGEventPost(kCGHIDEventTap, ev);
@@ -219,7 +245,12 @@ void vkbd_send_key(const struct vkbd *vkbd, uint8_t code, int state)
 		return;
 	}
 
-	post_key(cgkey, state);
+	if (cgkey < 128) {
+		struct vkbd *v = (struct vkbd *)vkbd;
+		v->key_states[cgkey] = (uint8_t)state;
+	}
+
+	post_key(cgkey, state, get_active_flags(vkbd));
 
 	/* Arm or cancel the software repeat timer for non-modifier keys. */
 	if (!is_modifier_cgkey(cgkey)) {
@@ -243,8 +274,6 @@ void vkbd_send_key(const struct vkbd *vkbd, uint8_t code, int state)
 
 void vkbd_mouse_move(const struct vkbd *vkbd, int x, int y)
 {
-	(void)vkbd;
-
 	/* Get current pointer position to compute absolute target. */
 	CGEventRef cursor_ev = CGEventCreate(NULL);
 	CGPoint pos = CGEventGetLocation(cursor_ev);
@@ -256,6 +285,7 @@ void vkbd_mouse_move(const struct vkbd *vkbd, int x, int y)
 	CGEventRef ev = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved,
 	                                         pos, kCGMouseButtonLeft);
 	if (ev) {
+		CGEventSetFlags(ev, get_active_flags(vkbd));
 		CGEventSetIntegerValueField(ev, kCGEventSourceUserData,
 		                            KEYD_EVENT_MARKER);
 		CGEventPost(kCGHIDEventTap, ev);
@@ -265,8 +295,6 @@ void vkbd_mouse_move(const struct vkbd *vkbd, int x, int y)
 
 void vkbd_mouse_move_abs(const struct vkbd *vkbd, int x, int y)
 {
-	(void)vkbd;
-
 	/*
 	 * keyd passes abs coordinates in a 0–1024 space.
 	 * Map to the main display's pixel dimensions.
@@ -282,6 +310,7 @@ void vkbd_mouse_move_abs(const struct vkbd *vkbd, int x, int y)
 	CGEventRef ev = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved,
 	                                         pos, kCGMouseButtonLeft);
 	if (ev) {
+		CGEventSetFlags(ev, get_active_flags(vkbd));
 		CGEventSetIntegerValueField(ev, kCGEventSourceUserData,
 		                            KEYD_EVENT_MARKER);
 		CGEventPost(kCGHIDEventTap, ev);
@@ -295,8 +324,6 @@ void vkbd_mouse_move_abs(const struct vkbd *vkbd, int x, int y)
 
 void vkbd_mouse_scroll(const struct vkbd *vkbd, int x, int y)
 {
-	(void)vkbd;
-
 	/*
 	 * CGEventCreateScrollWheelEvent2 takes unit (lines vs pixels) and up to
 	 * three axes.  We use kCGScrollEventUnitLine for coarse step behaviour
@@ -311,6 +338,7 @@ void vkbd_mouse_scroll(const struct vkbd *vkbd, int x, int y)
 	    0);
 
 	if (ev) {
+		CGEventSetFlags(ev, get_active_flags(vkbd));
 		CGEventSetIntegerValueField(ev, kCGEventSourceUserData,
 		                            KEYD_EVENT_MARKER);
 		CGEventPost(kCGHIDEventTap, ev);
