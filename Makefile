@@ -26,16 +26,19 @@ CFLAGS:=-DVERSION=\"v$(VERSION)\ \($(COMMIT)\)\" \
 platform=$(shell uname -s)
 
 ifeq ($(platform), Linux)
-	COMPAT_FILES=
+	COMPAT_FILES=src/platform/linux/*.c
+else ifeq ($(platform), Darwin)
+	COMPAT_FILES=src/platform/macos/*.c
+	LDFLAGS+=-framework IOKit -framework CoreFoundation
 else
 	LDFLAGS+=-linotify
-	COMPAT_FILES=
+	COMPAT_FILES=src/platform/linux/*.c
 endif
 
 all:
 	mkdir -p bin
 	cp scripts/keyd-application-mapper bin/
-	$(CC) $(CFLAGS) -O3 $(COMPAT_FILES) src/*.c src/vkbd/$(VKBD).c -lpthread -o bin/keyd $(LDFLAGS)
+	$(CC) $(CFLAGS) -O3 $(COMPAT_FILES) src/platform/common/*.c src/*.c src/vkbd/$(VKBD).c -lpthread -o bin/keyd $(LDFLAGS)
 debug:
 	CFLAGS="-g -fsanitize=address -Wunused" $(MAKE)
 compose:

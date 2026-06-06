@@ -4,7 +4,7 @@
  * © 2019 Raheman Vaiya (see also: LICENSE).
  */
 
-#include "keyd.h"
+#include "../../keyd.h"
 
 /* TODO (maybe): settle on an API and publish the protocol. */
 

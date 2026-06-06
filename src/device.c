@@ -6,6 +6,8 @@
 
 #include "keyd.h"
 
+#if defined(__linux__) || defined(__FreeBSD__)
+
 #include <stdio.h>
 #include <pthread.h>
 #include <string.h>
@@ -18,7 +20,10 @@
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
+
+#ifdef __linux__
 #include <sys/inotify.h>
+#endif
 
 /*
  * Abstract away evdev and inotify.
@@ -641,3 +646,4 @@ void device_set_led(const struct device *dev, int led, int state)
 
 	xwrite(dev->fd, &ev, sizeof ev);
 }
+#endif

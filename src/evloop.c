@@ -2,6 +2,8 @@
 
 #define MAX_AUX_FDS 32
 
+#if defined(__linux__) || defined(__FreeBSD__)
+
 static int aux_fds[MAX_AUX_FDS];
 static size_t nr_aux_fds = 0;
 
@@ -25,13 +27,6 @@ static void panic_check(uint8_t code, uint8_t pressed)
 
 	if (backspace && enter && escape)
 		die("panic sequence detected");
-}
-
-static long get_time_ms(void)
-{
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return ts.tv_sec * 1E3 + ts.tv_nsec / 1E6;
 }
 
 int evloop(int (*event_handler) (struct event *ev))
@@ -73,9 +68,9 @@ int evloop(int (*event_handler) (struct event *ev))
 			pfds[i+device_table_sz+1].events = POLLIN | POLLERR;
 		}
 
-		start_time = get_time_ms();
+		start_time = platform->get_time_ms();
 		poll(pfds, device_table_sz+nr_aux_fds+1, timeout > 0 ? timeout : -1);
-		ev.timestamp = get_time_ms();
+		ev.timestamp = platform->get_time_ms();
 		elapsed = ev.timestamp - start_time;
 
 		if (timeout > 0 && elapsed >= timeout) {
@@ -92,7 +87,7 @@ int evloop(int (*event_handler) (struct event *ev))
 				struct device_event *devev;
 				struct device *dev = &device_table[i];
 
-				while ((devev = device_read_event(dev))) {
+				while ((devev = platform->device_read_event(dev))) {
 					if (devev->type == DEV_REMOVED) {
 						ev.type = EV_DEV_REMOVE;
 						ev.dev = dev;
@@ -162,3 +157,4 @@ void evloop_add_fd(int fd)
 	assert(nr_aux_fds < MAX_AUX_FDS);
 	aux_fds[nr_aux_fds++] = fd;
 }
+#endif

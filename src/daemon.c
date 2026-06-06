@@ -157,7 +157,7 @@ static void on_layer_change(const struct keyboard *kbd, const struct layer *laye
 
 		for (i = 0; i < device_table_sz; i++)
 			if (device_table[i].data == kbd)
-				device_set_led(&device_table[i], 1, active_layers);
+				platform->device_set_led(&device_table[i], 1, active_layers);
 	}
 
 	if (!nr_listeners)
@@ -275,7 +275,7 @@ static void manage_device(struct device *dev)
 		flags |= ID_MOUSE;
 
 	if ((ent = lookup_config_ent(dev->id, flags))) {
-		if (device_grab(dev)) {
+		if (platform->device_grab(dev)) {
 			keyd_log("DEVICE: y{WARNING} Failed to grab %s\n", dev->path);
 			dev->data = NULL;
 			return;
@@ -287,7 +287,7 @@ static void manage_device(struct device *dev)
 		dev->data = ent->kbd;
 	} else {
 		dev->data = NULL;
-		device_ungrab(dev);
+		platform->device_ungrab(dev);
 		keyd_log("DEVICE: r{ignoring} %s  (%s)\n", dev->id, dev->name);
 	}
 }
@@ -445,6 +445,18 @@ static void handle_client(int con)
 	case IPC_LAYER_LISTEN:
 		add_listener(con);
 		break;
+	case IPC_GET_STATE:
+		if (active_kbd) {
+			struct ipc_message reply = {0};
+			reply.type = IPC_SUCCESS;
+			platform_get_kbd_state(active_kbd, reply.data, sizeof(reply.data));
+			reply.sz = strlen(reply.data);
+			xwrite(con, &reply, sizeof reply);
+		} else {
+			send_fail(con, "No active keyboard");
+		}
+		close(con);
+		break;
 	case IPC_BIND:
 		success = 0;
 
@@ -580,7 +592,7 @@ static int event_handler(struct event *ev)
 			 */
 			for (i = 0; i < device_table_sz; i++)
 				if (device_table[i].data)
-					device_set_led(&device_table[i], ev->devev->code, ev->devev->pressed);
+					platform->device_set_led(&device_table[i], ev->devev->code, ev->devev->pressed);
 		}
 
 		break;
@@ -611,41 +623,27 @@ static int event_handler(struct event *ev)
 
 int run_daemon(int argc, char *argv[])
 {
-	struct sched_param sp;
-	ipcfd = ipc_create_server();
+	ipcfd = platform->ipc_create_server();
 
 	if (ipcfd < 0)
 		die("failed to create %s (another instance already running?)", SOCKET_PATH);
 
-	vkbd = vkbd_init(VKBD_NAME);
+	vkbd = platform->vkbd_init(VKBD_NAME);
 
 	setvbuf(stdout, NULL, _IOLBF, 0);
 	setvbuf(stderr, NULL, _IOLBF, 0);
 
-	if (sched_getparam(0, &sp)) {
-		perror("sched_getparam");
-		exit(-1);
-	}
+	platform->set_realtime();
+	platform->lock_memory();
 
-	sp.sched_priority = 49;
-	if (sched_setscheduler(0, SCHED_FIFO, &sp)) {
-		perror("sched_setscheduler");
-		exit(-1);
-	}
-
-	if (mlockall(MCL_CURRENT | MCL_FUTURE)) {
-		perror("mlockall");
-		exit(-1);
-	}
-
-	evloop_add_fd(ipcfd);
+	platform->evloop_add_fd(ipcfd);
 
 	reload();
 
 	atexit(cleanup);
 
 	keyd_log("Starting keyd "VERSION"\n");
-	evloop(event_handler);
+	platform->evloop(event_handler);
 
 	return 0;
 }

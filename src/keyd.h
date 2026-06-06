@@ -35,7 +35,7 @@
 
 #ifdef __FreeBSD__
 	#include <dev/evdev/input.h>
-#else
+#elif defined(__linux__)
 	#include <linux/input.h>
 #endif
 
@@ -49,6 +49,7 @@
 #include "keys.h"
 #include "vkbd.h"
 #include "string.h"
+#include "platform.h"
 
 #define MAX_IPC_MESSAGE_SIZE 4096
 
@@ -82,6 +83,7 @@ struct ipc_message {
 		IPC_MACRO,
 		IPC_RELOAD,
 		IPC_LAYER_LISTEN,
+		IPC_GET_STATE,
 	} type;
 	
 	uint32_t timeout;

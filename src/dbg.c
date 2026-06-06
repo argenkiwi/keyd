@@ -9,10 +9,13 @@ static size_t dbg_print_device_bits(int fd, const char *name, int type, int max,
 	size_t n = (max+7)/8;
 	int has_set_bits = 0;
 
-	if (ioctl(fd, EVIOCGBIT(type, n), arr) == -1) {
-		perror("ioctl");
-		exit(-1);
-	}
+	#ifdef __linux__
+		if (ioctl(fd, EVIOCGBIT(type, n), arr) == -1) {
+			perror("ioctl");
+			return;
+		}
+	#endif
+
 
 	sz = snprintf(out, out_sz, "\t%s: ", name);
 	for (i = 0; i < n; i++)
@@ -52,10 +55,14 @@ void dbg_print_evdev_details(const char *path)
 		return;
 	}
 
+#ifdef __linux__
 	if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) == -1) {
 		perror("ioctl");
 		return;
 	}
+#else
+	name[0] = 0;
+#endif
 
 	sz = snprintf(out, sizeof out, "(%s) (%s):\n", path, name);
 	sz += dbg_print_device_bits(fd, "EV", 0, EV_MAX, out + sz, sizeof(out) - sz);

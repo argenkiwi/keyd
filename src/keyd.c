@@ -210,6 +210,13 @@ static int reload(int argc, char **argv)
 	return 0;
 }
 
+static int list_state(int argc, char **argv)
+{
+	ipc_exec(IPC_GET_STATE, NULL, 0, 0);
+
+	return 0;
+}
+
 struct {
 	const char *name;
 	const char *flag;
@@ -231,6 +238,7 @@ struct {
 
 	{"reload", "", "", reload},
 	{"list-keys", "", "", list_keys},
+	{"list-state", "", "", list_state},
 };
 
 int main(int argc, char *argv[])

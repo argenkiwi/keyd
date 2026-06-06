@@ -1,4 +1,4 @@
-#include "keyd.h"
+#include "../../keyd.h"
 
 void xwrite(int fd, const void *buf, size_t sz)
 {

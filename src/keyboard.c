@@ -1282,3 +1282,27 @@ int kbd_eval(struct keyboard *kbd, const char *exp)
 		return config_add_entry(&kbd->config, exp);
 	}
 }
+
+void platform_get_kbd_state(const struct keyboard *kbd, char *buf, size_t sz)
+{
+	size_t i;
+	int n = 0;
+
+	n += snprintf(buf + n, sz - n, "layers: ");
+	for (i = 0; i < kbd->config.nr_layers; i++) {
+		if (kbd->layer_state[i].active) {
+			n += snprintf(buf + n, sz - n, "%s ", kbd->config.layers[i].name);
+		}
+	}
+	n += snprintf(buf + n, sz - n, "\n");
+
+	n += snprintf(buf + n, sz - n, "mods: ");
+	if (kbd->keystate[KEYD_LEFTCTRL] || kbd->keystate[KEYD_RIGHTCTRL]) n += snprintf(buf + n, sz - n, "ctrl ");
+	if (kbd->keystate[KEYD_LEFTSHIFT] || kbd->keystate[KEYD_RIGHTSHIFT]) n += snprintf(buf + n, sz - n, "shift ");
+	if (kbd->keystate[KEYD_LEFTALT] || kbd->keystate[KEYD_RIGHTALT]) n += snprintf(buf + n, sz - n, "alt ");
+	if (kbd->keystate[KEYD_LEFTMETA] || kbd->keystate[KEYD_RIGHTMETA]) n += snprintf(buf + n, sz - n, "meta ");
+	if (kbd->keystate[KEYD_RIGHTALT]) n += snprintf(buf + n, sz - n, "altgr ");
+	n += snprintf(buf + n, sz - n, "\n");
+
+	n += snprintf(buf + n, sz - n, "last_pressed_code: %s\n", KEY_NAME(kbd->last_pressed_code));
+}

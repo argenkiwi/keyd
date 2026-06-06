@@ -10,7 +10,6 @@
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <linux/uinput.h>
 
 #include "../vkbd.h"
 #include "../keys.h"
