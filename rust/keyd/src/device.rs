@@ -2,6 +2,27 @@ use std::fs;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::ffi::CString;
 use libc::*;
+
+#[cfg(not(target_os = "linux"))]
+#[allow(non_camel_case_types)]
+#[repr(C)]
+struct input_id {
+    bustype: u16,
+    vendor: u16,
+    product: u16,
+    version: u16,
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(non_camel_case_types)]
+#[repr(C)]
+struct input_event {
+    time: libc::timeval,
+    type_: u16,
+    code: u16,
+    value: i32,
+}
+
 use crate::keys::*;
 
 pub const CAP_MOUSE: u8 = 0x1;

@@ -5,6 +5,26 @@ use std::sync::Mutex;
 use crate::keys::*;
 use libc::*;
 
+#[cfg(not(target_os = "linux"))]
+#[allow(non_camel_case_types)]
+#[repr(C)]
+struct input_id {
+    bustype: u16,
+    vendor: u16,
+    product: u16,
+    version: u16,
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(non_camel_case_types)]
+#[repr(C)]
+struct input_event {
+    time: libc::timeval,
+    type_: u16,
+    code: u16,
+    value: i32,
+}
+
 const UI_SET_EVBIT: u64 = 1074025827; // Simplified for this environment, ideally use nix or better constants
 const UI_SET_KEYBIT: u64 = 1074025828;
 const UI_SET_RELBIT: u64 = 1074025829;
