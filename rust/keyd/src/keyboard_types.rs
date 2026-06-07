@@ -1,5 +1,4 @@
 use crate::config::*;
-use crate::macro_types::*;
 
 #[derive(Debug, Clone, Copy)]
 pub struct CacheEntry {

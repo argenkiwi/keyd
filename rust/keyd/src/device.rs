@@ -1,5 +1,5 @@
 use std::fs;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::io::RawFd;
 use std::ffi::CString;
 use libc::*;
 
@@ -23,7 +23,6 @@ struct input_event {
     value: i32,
 }
 
-use crate::keys::*;
 
 pub const CAP_MOUSE: u8 = 0x1;
 pub const CAP_MOUSE_ABS: u8 = 0x2;

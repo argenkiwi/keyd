@@ -3,7 +3,6 @@ use crate::config_impl::*;
 use crate::keyboard_types::*;
 use crate::device::*;
 use crate::vkbd::*;
-use crate::ipc::*;
 
 pub struct Daemon {
     pub vkbd: Vkbd,

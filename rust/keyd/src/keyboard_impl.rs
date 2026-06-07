@@ -1,9 +1,6 @@
 use crate::config::*;
-use crate::macro_types::*;
 use crate::keyboard_types::*;
 use crate::keys::*;
-use crate::macro_parse::macro_parse;
-use crate::unicode::unicode_get_sequence;
 
 impl Keyboard {
     pub fn new(config: Config) -> Self {
@@ -162,7 +159,7 @@ impl Keyboard {
     }
 
     pub fn kbd_process_events<O: Output>(&mut self, output: &mut O, events: &[KeyEvent]) -> i64 {
-        let mut next_timeout = 0;
+        let next_timeout = 0;
         for event in events {
              self.process_event(output, event.code, event.pressed, event.timestamp as i64);
         }
