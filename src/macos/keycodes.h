@@ -11,7 +11,13 @@
 /* Returns the CGKeyCode for a given KEYD code, or 0xFFFF if unmapped. */
 uint16_t keyd_to_cgkey(uint8_t keyd_code);
 
+/* Returns the macOS special key type (NX_KEYTYPE_*) for a given KEYD code, or 0xFFFF if not a special key. */
+uint16_t keyd_to_special_key(uint8_t keyd_code);
+
 /* Returns the KEYD code for a given CGKeyCode (0–127), or 0 if unmapped. */
 uint8_t cgkey_to_keyd_code(uint16_t cgkey);
+
+/* Returns the KEYD code for a given NX_KEYTYPE_* value, or 0 if unmapped. */
+uint8_t nxkeytype_to_keyd_code(uint16_t keytype);
 
 #endif

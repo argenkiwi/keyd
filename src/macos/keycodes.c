@@ -9,6 +9,7 @@
  */
 
 #include <stdint.h>
+#include <IOKit/hidsystem/ev_keymap.h>
 #include "../keys.h"
 #include "keycodes.h"
 
@@ -162,4 +163,42 @@ uint16_t keyd_to_cgkey(uint8_t keyd_code)
 			return i;
 	}
 	return 0xFFFF;
+}
+
+uint16_t keyd_to_special_key(uint8_t keyd_code)
+{
+	switch (keyd_code) {
+	case KEYD_MUTE:           return NX_KEYTYPE_MUTE;
+	case KEYD_VOLUMEUP:       return NX_KEYTYPE_SOUND_UP;
+	case KEYD_VOLUMEDOWN:     return NX_KEYTYPE_SOUND_DOWN;
+	case KEYD_PLAYPAUSE:      return NX_KEYTYPE_PLAY;
+	case KEYD_NEXTSONG:       return NX_KEYTYPE_NEXT;
+	case KEYD_PREVIOUSSONG:   return NX_KEYTYPE_PREVIOUS;
+	case KEYD_BRIGHTNESSUP:   return NX_KEYTYPE_BRIGHTNESS_UP;
+	case KEYD_BRIGHTNESSDOWN: return NX_KEYTYPE_BRIGHTNESS_DOWN;
+	case KEYD_KBDILLUMUP:     return NX_KEYTYPE_ILLUMINATION_UP;
+	case KEYD_KBDILLUMDOWN:   return NX_KEYTYPE_ILLUMINATION_DOWN;
+	case KEYD_KBDILLUMTOGGLE: return NX_KEYTYPE_ILLUMINATION_TOGGLE;
+	case KEYD_EJECTCD:        return NX_KEYTYPE_EJECT;
+	default:                  return 0xFFFF;
+	}
+}
+
+uint8_t nxkeytype_to_keyd_code(uint16_t keytype)
+{
+	switch (keytype) {
+	case NX_KEYTYPE_MUTE:              return KEYD_MUTE;
+	case NX_KEYTYPE_SOUND_UP:          return KEYD_VOLUMEUP;
+	case NX_KEYTYPE_SOUND_DOWN:        return KEYD_VOLUMEDOWN;
+	case NX_KEYTYPE_PLAY:              return KEYD_PLAYPAUSE;
+	case NX_KEYTYPE_NEXT:              return KEYD_NEXTSONG;
+	case NX_KEYTYPE_PREVIOUS:          return KEYD_PREVIOUSSONG;
+	case NX_KEYTYPE_BRIGHTNESS_UP:     return KEYD_BRIGHTNESSUP;
+	case NX_KEYTYPE_BRIGHTNESS_DOWN:   return KEYD_BRIGHTNESSDOWN;
+	case NX_KEYTYPE_ILLUMINATION_UP:   return KEYD_KBDILLUMUP;
+	case NX_KEYTYPE_ILLUMINATION_DOWN: return KEYD_KBDILLUMDOWN;
+	case NX_KEYTYPE_ILLUMINATION_TOGGLE: return KEYD_KBDILLUMTOGGLE;
+	case NX_KEYTYPE_EJECT:             return KEYD_EJECTCD;
+	default:                           return 0;
+	}
 }

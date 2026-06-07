@@ -40,8 +40,8 @@ CORE_SRCS = src/keyd.c src/daemon.c src/keyboard.c src/config.c \
 
 ifeq ($(platform), Darwin)
 	VKBD=macos
-	PLATFORM_SRCS = src/macos/input.c src/macos/keycodes.c
-	PLATFORM_LDFLAGS = -framework CoreGraphics -framework ApplicationServices
+	PLATFORM_SRCS = src/macos/input.c src/macos/keycodes.c src/macos/special_keys.m
+	PLATFORM_LDFLAGS = -framework CoreGraphics -framework ApplicationServices -framework AppKit
 	CFLAGS += -DPLATFORM_MACOS
 else ifeq ($(platform), Linux)
 	VKBD=uinput

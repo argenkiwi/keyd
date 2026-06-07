@@ -28,9 +28,11 @@
 #include <unistd.h>
 
 #include <ApplicationServices/ApplicationServices.h>
+#include <IOKit/hidsystem/IOLLEvent.h>
 
 #include "../keyd.h"
 #include "keycodes.h"
+#include "special_keys.h"
 
 /* -------------------------------------------------------------------------
  * Globals — exported from evloop.c on Linux; defined here on macOS.
@@ -135,16 +137,26 @@ static CGEventRef tap_callback(CGEventTapProxy proxy,
 	    KEYD_EVENT_MARKER)
 		return event;
 
-	raw.cgkey = (uint16_t)CGEventGetIntegerValueField(
-	    event, kCGKeyboardEventKeycode);
+	if (type == kCGEventKeyDown || type == kCGEventKeyUp ||
+	    type == kCGEventFlagsChanged) {
+		raw.cgkey = (uint16_t)CGEventGetIntegerValueField(
+		    event, kCGKeyboardEventKeycode);
 
-	if (type == kCGEventKeyDown) {
-		raw.pressed = 1;
-	} else if (type == kCGEventKeyUp) {
-		raw.pressed = 0;
-	} else if (type == kCGEventFlagsChanged) {
-		CGEventFlags flags = CGEventGetFlags(event);
-		raw.pressed = (uint8_t)flags_changed_pressed(raw.cgkey, flags);
+		if (type == kCGEventKeyDown) {
+			raw.pressed = 1;
+		} else if (type == kCGEventKeyUp) {
+			raw.pressed = 0;
+		} else {
+			CGEventFlags flags = CGEventGetFlags(event);
+			raw.pressed = (uint8_t)flags_changed_pressed(raw.cgkey, flags);
+		}
+	} else if (type == (CGEventType)NX_SYSDEFINED) {
+		uint16_t keytype;
+		int      pressed;
+		if (!macos_decode_special_key(event, &keytype, &pressed))
+			return event;
+		raw.cgkey   = 0x200 + keytype;
+		raw.pressed = (uint8_t)pressed;
 	} else {
 		return event;
 	}
@@ -171,7 +183,8 @@ static void *tap_thread(void *arg)
 	CGEventMask mask =
 	    CGEventMaskBit(kCGEventKeyDown)      |
 	    CGEventMaskBit(kCGEventKeyUp)        |
-	    CGEventMaskBit(kCGEventFlagsChanged);
+	    CGEventMaskBit(kCGEventFlagsChanged) |
+	    CGEventMaskBit(NX_SYSDEFINED);
 
 	/*
 	 * Pass &s_port as context so the callback can call CGEventTapEnable()
@@ -271,9 +284,15 @@ struct device_event *device_read_event(struct device *dev)
 	if (read(s_event_pipe[0], &raw, sizeof raw) != (ssize_t)sizeof raw)
 		return NULL; /* EAGAIN or partial read */
 
-	uint8_t keyd_code = cgkey_to_keyd_code(raw.cgkey);
+	uint8_t keyd_code;
+	if (raw.cgkey >= 0x200)
+		keyd_code = nxkeytype_to_keyd_code(raw.cgkey - 0x200);
+	else
+		keyd_code = cgkey_to_keyd_code(raw.cgkey);
 	if (!keyd_code) {
-		dbg("macOS: unmapped CGKeyCode 0x%02x", (unsigned)raw.cgkey);
+		dbg("macOS: unmapped %s 0x%02x",
+		    raw.cgkey >= 0x200 ? "NX keytype" : "CGKeyCode",
+		    (unsigned)(raw.cgkey >= 0x200 ? raw.cgkey - 0x200 : raw.cgkey));
 		return NULL;
 	}
 

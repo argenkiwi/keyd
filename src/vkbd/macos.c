@@ -27,6 +27,7 @@
 
 #include "../keyd.h"
 #include "../macos/keycodes.h"
+#include "../macos/special_keys.h"
 
 #define KEYD_EVENT_MARKER ((int64_t)0x6B657964ULL)
 
@@ -138,6 +139,11 @@ static void sleep_ms(long ms)
 
 static void post_key_repeat(const struct vkbd *vkbd, uint16_t cgkey)
 {
+	if (cgkey >= 0x100) {
+		macos_post_special_key(cgkey - 0x100, 1);
+		return;
+	}
+
 	CGEventRef ev = CGEventCreateKeyboardEvent(NULL, (CGKeyCode)cgkey, true);
 	if (!ev)
 		return;
@@ -211,6 +217,11 @@ void free_vkbd(struct vkbd *vkbd)
 
 static void post_key(const struct vkbd *vkbd, uint16_t cgkey, int pressed)
 {
+	if (cgkey >= 0x100) {
+		macos_post_special_key(cgkey - 0x100, pressed);
+		return;
+	}
+
 	CGEventRef ev = CGEventCreateKeyboardEvent(NULL, (CGKeyCode)cgkey,
 	                                           pressed ? true : false);
 	if (!ev)
@@ -275,7 +286,13 @@ void vkbd_send_key(const struct vkbd *vkbd, uint8_t code, int state)
 		}
 	}
 
-	uint16_t cgkey = keyd_to_cgkey(code);
+	uint16_t cgkey = keyd_to_special_key(code);
+	if (cgkey != 0xFFFF) {
+		cgkey += 0x100;
+	} else {
+		cgkey = keyd_to_cgkey(code);
+	}
+
 	if (cgkey == 0xFFFF) {
 		dbg("macOS: no CGKeyCode mapping for KEYD code %u", (unsigned)code);
 		return;
