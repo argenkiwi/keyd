@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "cpp-to-rust-port": {
+      "source": "realadarsh/cpp-to-rust-skill",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "462e7b2c01a48399f4e1fba77309ff43b951a99a89a32f088991afce4ba95dbb"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+/home/argenkiwi/Code/mappers/keyd/rust/keyd/target/debug/deps/nix-e79917b98815dba6.d: /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/lib.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/macros.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/errno.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/fcntl.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/sys/mod.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/sys/signal.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/sys/sysinfo.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/sys/time.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/unistd.rs
+
+/home/argenkiwi/Code/mappers/keyd/rust/keyd/target/debug/deps/libnix-e79917b98815dba6.rmeta: /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/lib.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/macros.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/errno.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/fcntl.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/sys/mod.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/sys/signal.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/sys/sysinfo.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/sys/time.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/unistd.rs
+
+/home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/lib.rs:
+/home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/macros.rs:
+/home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/errno.rs:
+/home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/fcntl.rs:
+/home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/sys/mod.rs:
+/home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/sys/signal.rs:
+/home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/sys/sysinfo.rs:
+/home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/sys/time.rs:
+/home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nix-0.31.3/src/unistd.rs:

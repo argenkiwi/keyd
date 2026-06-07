@@ -1,0 +1,11 @@
+/home/argenkiwi/Code/mappers/keyd/rust/keyd/target/debug/deps/inotify-e562f8029781dfac.d: /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/lib.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/events.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/fd_guard.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/inotify.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/util.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/watches.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/stream.rs
+
+/home/argenkiwi/Code/mappers/keyd/rust/keyd/target/debug/deps/libinotify-e562f8029781dfac.rmeta: /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/lib.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/events.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/fd_guard.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/inotify.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/util.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/watches.rs /home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/stream.rs
+
+/home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/lib.rs:
+/home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/events.rs:
+/home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/fd_guard.rs:
+/home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/inotify.rs:
+/home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/util.rs:
+/home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/watches.rs:
+/home/argenkiwi/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/inotify-0.11.2/src/stream.rs:

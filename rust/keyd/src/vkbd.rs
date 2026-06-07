@@ -1,0 +1,216 @@
+use std::fs::{File, OpenOptions};
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::io::Write;
+use std::sync::Mutex;
+use crate::keys::*;
+use libc::*;
+
+const UI_SET_EVBIT: u64 = 1074025827; // Simplified for this environment, ideally use nix or better constants
+const UI_SET_KEYBIT: u64 = 1074025828;
+const UI_SET_RELBIT: u64 = 1074025829;
+const UI_SET_ABSBIT: u64 = 1074025830;
+const UI_SET_LEDBIT: u64 = 1074025831;
+const UI_DEV_CREATE: u64 = 21761;
+
+const EV_SYN: u16 = 0x00;
+const EV_KEY: u16 = 0x01;
+const EV_REL: u16 = 0x02;
+const EV_ABS: u16 = 0x03;
+const EV_LED: u16 = 0x11;
+const EV_REP: u16 = 0x14;
+
+const REL_X: u16 = 0x00;
+const REL_Y: u16 = 0x01;
+const REL_Z: u16 = 0x02;
+const REL_WHEEL: u16 = 0x08;
+const REL_HWHEEL: u16 = 0x06;
+
+const ABS_X: u16 = 0x00;
+const ABS_Y: u16 = 0x01;
+
+const BUS_USB: u16 = 0x03;
+
+const BTN_LEFT: u16 = 0x110;
+const BTN_RIGHT: u16 = 0x111;
+const BTN_MIDDLE: u16 = 0x112;
+const BTN_SIDE: u16 = 0x113;
+const BTN_EXTRA: u16 = 0x114;
+const BTN_FORWARD: u16 = 0x115;
+const BTN_BACK: u16 = 0x116;
+const BTN_TASK: u16 = 0x117;
+
+const KEY_ZOOM: u16 = 0x1a2;
+const KEY_VOICECOMMAND: u16 = 0x1bc;
+
+const LED_NUML: u16 = 0x00;
+const LED_MISC: u16 = 0x07;
+
+#[repr(C)]
+struct UinputUserDev {
+    name: [c_char; 80],
+    id: input_id,
+    ff_effects_max: u32,
+    absmax: [i32; 64],
+    absmin: [i32; 64],
+    absfuzz: [i32; 64],
+    absflat: [i32; 64],
+}
+
+pub struct Vkbd {
+    fd: File,
+    pfd: File,
+    mtx: Mutex<()>,
+}
+
+fn ioctl(fd: RawFd, request: u64, arg: c_int) -> c_int {
+    unsafe { libc::ioctl(fd, request, arg) }
+}
+
+fn ioctl_no_arg(fd: RawFd, request: u64) -> c_int {
+    unsafe { libc::ioctl(fd, request) }
+}
+
+impl Vkbd {
+    pub fn init(name: &str) -> Result<Self, String> {
+        let fd = Self::create_virtual_keyboard(name)?;
+        let pfd = Self::create_virtual_pointer("keyd virtual pointer")?;
+        Ok(Self { fd, pfd, mtx: Mutex::new(()) })
+    }
+
+    fn create_virtual_keyboard(name: &str) -> Result<File, String> {
+        let file = OpenOptions::new().write(true).open("/dev/uinput").map_err(|e| e.to_string())?;
+        let fd = file.as_raw_fd();
+
+        ioctl(fd, UI_SET_EVBIT, EV_REP as i32);
+        ioctl(fd, UI_SET_EVBIT, EV_KEY as i32);
+        ioctl(fd, UI_SET_EVBIT, EV_LED as i32);
+        ioctl(fd, UI_SET_EVBIT, EV_SYN as i32);
+
+        for code in 0..256 {
+            if KEYCODE_TABLE[code].name.is_some() {
+                ioctl(fd, UI_SET_KEYBIT, code as i32);
+            }
+        }
+
+        for i in LED_NUML..=LED_MISC {
+            ioctl(fd, UI_SET_LEDBIT, i as i32);
+        }
+
+        ioctl(fd, UI_SET_KEYBIT, KEY_ZOOM as i32);
+
+        let mut udev: UinputUserDev = unsafe { std::mem::zeroed() };
+        udev.id.bustype = BUS_USB;
+        udev.id.vendor = 0x0FAC;
+        udev.id.product = 0x0ADE;
+        
+        let name_bytes = name.as_bytes();
+        let len = std::cmp::min(name_bytes.len(), udev.name.len() - 1);
+        for i in 0..len {
+            udev.name[i] = name_bytes[i] as c_char;
+        }
+
+        let udev_slice = unsafe {
+            std::slice::from_raw_parts(&udev as *const _ as *const u8, std::mem::size_of::<UinputUserDev>())
+        };
+
+        let mut file = file;
+        file.write_all(udev_slice).map_err(|e| e.to_string())?;
+
+        if ioctl_no_arg(fd, UI_DEV_CREATE) < 0 {
+            return Err("Failed to create uinput device".to_string());
+        }
+
+        Ok(file)
+    }
+
+    fn create_virtual_pointer(name: &str) -> Result<File, String> {
+        let file = OpenOptions::new().write(true).open("/dev/uinput").map_err(|e| e.to_string())?;
+        let fd = file.as_raw_fd();
+
+        ioctl(fd, UI_SET_EVBIT, EV_REL as i32);
+        ioctl(fd, UI_SET_EVBIT, EV_ABS as i32);
+        ioctl(fd, UI_SET_EVBIT, EV_KEY as i32);
+        ioctl(fd, UI_SET_EVBIT, EV_SYN as i32);
+
+        ioctl(fd, UI_SET_ABSBIT, ABS_X as i32);
+        ioctl(fd, UI_SET_ABSBIT, ABS_Y as i32);
+        ioctl(fd, UI_SET_RELBIT, REL_X as i32);
+        ioctl(fd, UI_SET_RELBIT, REL_WHEEL as i32);
+        ioctl(fd, UI_SET_RELBIT, REL_HWHEEL as i32);
+        ioctl(fd, UI_SET_RELBIT, REL_Y as i32);
+        ioctl(fd, UI_SET_RELBIT, REL_Z as i32);
+
+        for code in BTN_LEFT..=BTN_TASK {
+            ioctl(fd, UI_SET_KEYBIT, code as i32);
+        }
+
+        let mut udev: UinputUserDev = unsafe { std::mem::zeroed() };
+        udev.id.bustype = BUS_USB;
+        udev.id.vendor = 0x0FAC;
+        udev.id.product = 0x1ADE;
+        udev.absmax[ABS_X as usize] = 1024;
+        udev.absmax[ABS_Y as usize] = 1024;
+
+        let name_bytes = name.as_bytes();
+        let len = std::cmp::min(name_bytes.len(), udev.name.len() - 1);
+        for i in 0..len {
+            udev.name[i] = name_bytes[i] as c_char;
+        }
+
+        let udev_slice = unsafe {
+            std::slice::from_raw_parts(&udev as *const _ as *const u8, std::mem::size_of::<UinputUserDev>())
+        };
+
+        let mut file = file;
+        file.write_all(udev_slice).map_err(|e| e.to_string())?;
+
+        if ioctl_no_arg(fd, UI_DEV_CREATE) < 0 {
+            return Err("Failed to create uinput device".to_string());
+        }
+
+        Ok(file)
+    }
+
+    pub fn send_key(&self, code: u8, state: u8) {
+        let _lock = self.mtx.lock().unwrap();
+        let mut is_btn = true;
+        let mapped_code = match code {
+            KEYD_LEFT_MOUSE => BTN_LEFT,
+            KEYD_MIDDLE_MOUSE => BTN_MIDDLE,
+            KEYD_RIGHT_MOUSE => BTN_RIGHT,
+            KEYD_MOUSE_1 => BTN_SIDE,
+            KEYD_MOUSE_2 => BTN_EXTRA,
+            KEYD_MOUSE_BACK => BTN_BACK,
+            KEYD_MOUSE_FORWARD => BTN_FORWARD,
+            KEYD_ZOOM => { is_btn = false; KEY_ZOOM },
+            KEYD_VOICECOMMAND => { is_btn = false; KEY_VOICECOMMAND },
+            _ => { is_btn = false; code as u16 },
+        };
+
+        let fd = if is_btn {
+            // Mouse button events need a small delay in original C code
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            self.pfd.as_raw_fd()
+        } else {
+            self.fd.as_raw_fd()
+        };
+
+        self.write_event(fd, EV_KEY, mapped_code, state as i32);
+        self.write_event(fd, EV_SYN, 0, 0);
+    }
+
+    fn write_event(&self, fd: RawFd, type_: u16, code: u16, value: i32) {
+        let mut ev: input_event = unsafe { std::mem::zeroed() };
+        ev.type_ = type_;
+        ev.code = code;
+        ev.value = value;
+        
+        let ev_slice = unsafe {
+            std::slice::from_raw_parts(&ev as *const _ as *const u8, std::mem::size_of::<input_event>())
+        };
+        
+        unsafe {
+            libc::write(fd, ev_slice.as_ptr() as *const c_void, ev_slice.len());
+        }
+    }
+}
