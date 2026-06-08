@@ -198,14 +198,12 @@ impl Keyboard {
                         }
                     }
                 } else {
-                    // Implicit keypress
+                    // Passthrough: key has no mapping, emit as-is without touching modifier state.
                     if pressed != 0 {
                         self.cache_set(code, Some(CacheEntry { code, d, dl: 0, layer }));
-                        self.update_mods(output, -1, 0);
                         self.send_key(output, code, 1);
                     } else {
                         self.send_key(output, code, 0);
-                        self.update_mods(output, -1, 0);
                     }
                 }
             }

@@ -220,13 +220,119 @@ mod linux {
 #[cfg(target_os = "linux")]
 pub use linux::Vkbd;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+mod macos_vkbd {
+    use std::cell::UnsafeCell;
+    use std::sync::{Arc, Mutex, Condvar};
+    use crate::macos_input;
+
+    struct RepeatState {
+        key:        u16,
+        armed:      bool,
+        revision:   u32,
+    }
+
+    pub struct Vkbd {
+        key_states: UnsafeCell<[u8; 128]>,
+        repeat:     Arc<(Mutex<RepeatState>, Condvar)>,
+    }
+
+    // send_key is only called from the main daemon thread; the repeat thread
+    // only calls post_key_repeat with a zeroed state snapshot.
+    unsafe impl Sync for Vkbd {}
+    unsafe impl Send for Vkbd {}
+
+    impl Vkbd {
+        pub fn init(_name: &str) -> Result<Self, String> {
+            let repeat = Arc::new((
+                Mutex::new(RepeatState { key: 0, armed: false, revision: 0 }),
+                Condvar::new(),
+            ));
+
+            let repeat_clone = Arc::clone(&repeat);
+            std::thread::spawn(move || {
+                let (delay_ms, interval_ms) = macos_input::get_repeat_settings();
+                let (lock, cvar) = &*repeat_clone;
+
+                loop {
+                    // Wait until a key is armed.
+                    let (rev, key) = {
+                        let mut st = lock.lock().unwrap();
+                        while !st.armed {
+                            st = cvar.wait(st).unwrap();
+                        }
+                        (st.revision, st.key)
+                    };
+
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+
+                    // If cancelled during the delay, restart.
+                    if lock.lock().unwrap().revision != rev {
+                        continue;
+                    }
+
+                    // Fire repeats at the system interval until cancelled.
+                    loop {
+                        if lock.lock().unwrap().revision != rev {
+                            break;
+                        }
+                        // Modifier flags for the repeat event come from the
+                        // system's own modifier state (set via the FlagsChanged
+                        // events already posted).  Pass a zeroed state so we
+                        // don't double-apply them.
+                        macos_input::post_key_repeat(key, &[0u8; 128]);
+                        std::thread::sleep(std::time::Duration::from_millis(interval_ms));
+                    }
+                }
+            });
+
+            Ok(Vkbd {
+                key_states: UnsafeCell::new([0u8; 128]),
+                repeat,
+            })
+        }
+
+        pub fn send_key(&self, code: u8, state: u8) {
+            let cgkey = match macos_input::keyd_to_cgkey_code(code) {
+                Some(k) => k,
+                None    => return,
+            };
+            unsafe {
+                let states = &mut *self.key_states.get();
+                if (cgkey as usize) < 128 {
+                    states[cgkey as usize] = state;
+                }
+                macos_input::post_key(cgkey, state != 0, states);
+            }
+
+            // Arm or cancel the software repeat timer for non-modifier keys.
+            if !macos_input::is_modifier_cgkey(cgkey) {
+                let (lock, cvar) = &*self.repeat;
+                let mut st = lock.lock().unwrap();
+                if state != 0 {
+                    st.key       = cgkey;
+                    st.armed     = true;
+                    st.revision += 1;
+                    cvar.notify_one();
+                } else if st.key == cgkey && st.armed {
+                    st.armed     = false;
+                    st.revision += 1;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub use macos_vkbd::Vkbd;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub struct Vkbd;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 impl Vkbd {
     pub fn init(_name: &str) -> Result<Self, String> {
-        log::info!("vkbd: stub init (non-Linux — no-op)");
+        log::info!("vkbd: stub init (unsupported platform)");
         Ok(Vkbd)
     }
 

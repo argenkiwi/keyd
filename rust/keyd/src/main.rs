@@ -12,6 +12,8 @@ pub mod keyboard_types;
 pub mod keyboard_impl;
 pub mod daemon;
 pub mod ipc;
+#[cfg(target_os = "macos")]
+pub mod macos_input;
 #[cfg(test)]
 pub mod tests;
 #[cfg(test)]

@@ -70,6 +70,7 @@ const EVIOCGNAME: u64 = 2147501318;
 const EVIOCGID: u64 = 2147501314;
 const EVIOCGABS: u64 = 2147501376;
 
+#[cfg(target_os = "linux")]
 impl Device {
     pub fn scan() -> Vec<Device> {
         let mut devices = Vec::new();
@@ -139,7 +140,7 @@ impl Device {
     pub fn read_event(&mut self) -> Option<DeviceEvent> {
         let mut ev: input_event = unsafe { std::mem::zeroed() };
         let res = unsafe { read(self.fd, &mut ev as *mut _ as *mut c_void, std::mem::size_of::<input_event>()) };
-        
+
         if res < 0 {
             return None;
         }
@@ -157,4 +158,57 @@ impl Device {
             _ => None
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+impl Device {
+    pub fn scan() -> Vec<Device> {
+        let read_fd = crate::macos_input::tap_init();
+        vec![Device {
+            fd: read_fd,
+            grabbed: false,
+            capabilities: CAP_KEYBOARD | CAP_KEY,
+            is_virtual: false,
+            id: "0000:0000".to_string(),
+            name: "CGEventTap".to_string(),
+            path: String::new(),
+            minx: 0, maxx: 0, miny: 0, maxy: 0,
+            pending_rel_x: 0, pending_rel_y: 0,
+        }]
+    }
+
+    pub fn init(_path: &str) -> Result<Self, String> {
+        Err("Direct device access not supported on macOS".to_string())
+    }
+
+    pub fn grab(&mut self) -> Result<(), String> {
+        self.grabbed = true;
+        Ok(())  // CGEventTap captures all keyboards globally
+    }
+
+    pub fn ungrab(&mut self) -> Result<(), String> {
+        self.grabbed = false;
+        Ok(())
+    }
+
+    pub fn read_event(&mut self) -> Option<DeviceEvent> {
+        let (cgkey, pressed) = crate::macos_input::tap_read(self.fd)?;
+        let code = crate::macos_input::cgkey_to_keyd_code(cgkey)?;
+        Some(DeviceEvent {
+            event_type: DeviceEventType::Key,
+            code,
+            pressed,
+            x: 0,
+            y: 0,
+        })
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+impl Device {
+    pub fn scan() -> Vec<Device> { Vec::new() }
+    pub fn init(_path: &str) -> Result<Self, String> { Err("Unsupported platform".to_string()) }
+    pub fn grab(&mut self) -> Result<(), String> { Err("Unsupported platform".to_string()) }
+    pub fn ungrab(&mut self) -> Result<(), String> { Err("Unsupported platform".to_string()) }
+    pub fn read_event(&mut self) -> Option<DeviceEvent> { None }
 }
