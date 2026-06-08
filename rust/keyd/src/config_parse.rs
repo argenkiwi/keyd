@@ -170,6 +170,14 @@ pub fn config_parse_descriptor(
         });
     }
 
+    // Zero-argument keywords accepted without parentheses (C syntax: `x = clear`).
+    match s.trim() {
+        "clear"     => return Ok(Descriptor { op: Op::Clear,           data: DescriptorData::None }),
+        "repeat"    => return Ok(Descriptor { op: Op::Repeat,          data: DescriptorData::None }),
+        "scrolloff" => return Ok(Descriptor { op: Op::ScrollToggleOff, data: DescriptorData::None }),
+        _ => {}
+    }
+
     if let Some((fn_name, args)) = parse_fn(s) {
         // Handle lettermod special case
         if fn_name == "lettermod" {
