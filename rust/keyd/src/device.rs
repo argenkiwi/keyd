@@ -1,7 +1,4 @@
-use std::fs;
 use std::os::unix::io::RawFd;
-use std::ffi::CString;
-use libc::*;
 
 #[cfg(not(target_os = "linux"))]
 #[allow(non_camel_case_types)]
