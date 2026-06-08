@@ -184,6 +184,7 @@ impl Keyboard {
     }
 
     fn execute_descriptor<O: Output>(&mut self, output: &mut O, d: Descriptor, code: u8, layer: i32, pressed: u8, time: i64) {
+        log::debug!("Executing descriptor: {:?} for code: {} in layer: {} (pressed: {})", d.op, code, layer, pressed);
         match d.op {
             Op::KeySequence => {
                 if let DescriptorData::KeySequence(ks) = d.data {
@@ -226,7 +227,13 @@ impl Keyboard {
                 }
             }
             _ => {
-                // TODO: Implement other ops
+                log::warn!("Unimplemented operation: {:?} for key {}, falling back to passthrough", d.op, KEYCODE_TABLE[code as usize].name.unwrap_or("UNKNOWN"));
+                if pressed != 0 {
+                    self.cache_set(code, Some(CacheEntry { code, d, dl: 0, layer }));
+                    self.send_key(output, code, 1);
+                } else {
+                    self.send_key(output, code, 0);
+                }
             }
         }
     }

@@ -298,6 +298,7 @@ unsafe extern "C" fn tap_callback(
         let ctx = &mut *(user_info as *mut TapCtx);
 
         if event_type == CG_TAP_DISABLED_TIMEOUT || event_type == CG_TAP_DISABLED_USER {
+            log::warn!("keyd: event tap disabled, re-enabling");
             CGEventTapEnable(ctx.port, true);
             return event;
         }
@@ -321,8 +322,11 @@ unsafe extern "C" fn tap_callback(
             _ => return event,  // NX_SYSDEFINED (media keys) etc: pass through
         };
 
+        log::trace!("keyd tap: cgkey={}, pressed={}", cgkey, pressed);
         let raw: [u8; 3] = [(cgkey >> 8) as u8, (cgkey & 0xFF) as u8, pressed];
-        libc::write(ctx.write_fd, raw.as_ptr() as *const c_void, 3);
+        if libc::write(ctx.write_fd, raw.as_ptr() as *const c_void, 3) < 0 {
+            log::error!("keyd: failed to write to pipe");
+        }
 
         std::ptr::null_mut()
     }
@@ -460,6 +464,7 @@ pub fn post_key_repeat(cgkey: u16, key_states: &[u8; 128]) {
 
 /// Inject a key event via CGEventPost with correct modifier flags.
 pub fn post_key(cgkey: u16, pressed: bool, key_states: &[u8; 128]) {
+    log::trace!("keyd post: cgkey={}, pressed={}", cgkey, pressed);
     unsafe {
         let ev = CGEventCreateKeyboardEvent(std::ptr::null(), cgkey, pressed);
         if ev.is_null() { return; }

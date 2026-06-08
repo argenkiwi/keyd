@@ -34,8 +34,9 @@ pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, 
         }
     }
 
-    // Default layers
-    create_layer(config, "main", LayerType::Normal);
+    // Default layers — main is always a layout layer (mirrors C's `[main:layout]` default)
+    let main_idx = create_layer(config, "main", LayerType::Normal);
+    config.layers[main_idx].layer_type = LayerType::Layout;
     let control_idx = create_layer(config, "control", LayerType::Normal);
     config.layers[control_idx].mods = MOD_CTRL;
     let shift_idx = create_layer(config, "shift", LayerType::Normal);
@@ -53,12 +54,18 @@ pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, 
 
         if section.name == "ids" {
             for entry in &section.entries {
-                let id = entry.key.clone();
-                let mut _flags = ID_KEYBOARD | ID_KEY;
-                if id.starts_with('-') {
-                    _flags = ID_EXCLUDED;
+                let s = &entry.key;
+                if s == "*" {
+                    config.wildcard = 1;
+                } else if let Some(id) = s.strip_prefix("m:") {
+                    config.ids.push(ConfigId { id: id.to_string(), flags: ID_MOUSE });
+                } else if let Some(id) = s.strip_prefix("k:") {
+                    config.ids.push(ConfigId { id: id.to_string(), flags: ID_KEYBOARD | ID_KEY });
+                } else if let Some(id) = s.strip_prefix('-') {
+                    config.ids.push(ConfigId { id: id.to_string(), flags: ID_EXCLUDED });
+                } else {
+                    config.ids.push(ConfigId { id: s.clone(), flags: ID_KEYBOARD | ID_KEY | ID_MOUSE });
                 }
-                config.ids.push(ConfigId { id, flags: _flags });
             }
         } else if section.name == "global" {
             for entry in &section.entries {
@@ -69,7 +76,7 @@ pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, 
                         "macro_repeat_timeout" => config.macro_repeat_timeout = val.parse().unwrap_or(0),
                         "oneshot_timeout" => config.oneshot_timeout = val.parse().unwrap_or(0),
                         "overload_tap_timeout" => config.overload_tap_timeout = val.parse().unwrap_or(0),
-                        "chord_interkey_timeout" => config.chord_interkey_timeout = val.parse().unwrap_or(0),
+                        "chord_interkey_timeout" | "chord_timeout" => config.chord_interkey_timeout = val.parse().unwrap_or(0),
                         "chord_hold_timeout" => config.chord_hold_timeout = val.parse().unwrap_or(0),
                         "layer_indicator" => config.layer_indicator = val.parse().unwrap_or(0),
                         "disable_modifier_guard" => config.disable_modifier_guard = val.parse().unwrap_or(0),
@@ -106,14 +113,6 @@ pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, 
             for entry in &section.entries {
                 ctx.current_line = entry.lnum - 1;
                 
-                // Handle include directive
-                if entry.key == "include" {
-                    if let Some(ref _val) = entry.val {
-                        // In a real implementation we would load the file.
-                    }
-                    continue;
-                }
-
                 if let Some((code, _)) = parse_key_sequence(&entry.key) {
                     if let Some(ref val) = entry.val {
                         let desc = config_parse_descriptor(val, config, &mut ctx)?;
@@ -145,21 +144,107 @@ pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, 
         }
     }
 
+    // Merge constituent keymaps into composite layers (explicit entries take priority).
+    // Collect first to avoid borrow conflicts, then apply.
+    let mut merges: Vec<(usize, usize, Descriptor)> = Vec::new();
+    for i in 0..config.layers.len() {
+        if config.layers[i].layer_type != LayerType::Composite {
+            continue;
+        }
+        for ci in 0..config.layers[i].nr_constituents {
+            let const_idx = config.layers[i].constituents[ci] as usize;
+            for key in 0..256usize {
+                let ce = &config.layers[i].keymap[key];
+                let unset = ce.op == Op::KeySequence && matches!(ce.data, DescriptorData::None);
+                if unset {
+                    let fe = config.layers[const_idx].keymap[key];
+                    let has_entry = fe.op != Op::KeySequence
+                        || !matches!(fe.data, DescriptorData::None);
+                    if has_entry {
+                        merges.push((i, key, fe));
+                    }
+                }
+            }
+        }
+    }
+    for (ci, key, desc) in merges {
+        config.layers[ci].keymap[key] = desc;
+    }
+
     Ok(ctx.nr_warnings)
 }
 
-pub fn config_check_match(config: &Config, id: &str, _flags: u8) -> i32 {
-    let mut rank = 0;
+pub fn config_check_match(config: &Config, id: &str, flags: u8) -> i32 {
     for cfg_id in &config.ids {
-        if cfg_id.id == "*" {
-            if rank < 1 { rank = 1; }
-        } else if cfg_id.id.starts_with('-') && &cfg_id.id[1..] == id {
-            return 0;
-        } else if cfg_id.id == id {
-            rank = 2;
+        if id.starts_with(cfg_id.id.as_str()) {
+            if cfg_id.flags & ID_EXCLUDED != 0 {
+                return 0;
+            } else if cfg_id.flags & flags != 0 {
+                return 2;
+            }
         }
     }
-    rank
+    if config.wildcard != 0 { 1 } else { 0 }
+}
+
+pub fn config_parse(path: &str) -> Result<Config, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {}", path, e))?;
+
+    let config_dir = std::path::Path::new(path)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    let preprocessed = preprocess_includes(&content, &config_dir)?;
+
+    let mut config = Config::new();
+    config_parse_string(&mut config, &preprocessed)?;
+    config.path = path.to_string();
+    Ok(config)
+}
+
+fn preprocess_includes(content: &str, config_dir: &std::path::Path) -> Result<String, String> {
+    let mut result = String::new();
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("include ") {
+            let include_path_str = rest.trim();
+            match resolve_include_path(config_dir, include_path_str) {
+                Ok(resolved) => {
+                    let included = std::fs::read_to_string(&resolved)
+                        .map_err(|e| format!("Failed to open include {}: {}", resolved, e))?;
+                    let included_dir = std::path::Path::new(&resolved)
+                        .parent()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| config_dir.to_path_buf());
+                    let nested = preprocess_includes(&included, &included_dir)?;
+                    result.push_str(&nested);
+                    if !result.ends_with('\n') {
+                        result.push('\n');
+                    }
+                }
+                Err(e) => eprintln!("WARNING: {}", e),
+            }
+        } else {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+    Ok(result)
+}
+
+fn resolve_include_path(config_dir: &std::path::Path, include_path: &str) -> Result<String, String> {
+    let candidate = config_dir.join(include_path);
+    if candidate.exists() {
+        return Ok(candidate.to_string_lossy().into_owned());
+    }
+    let data_dir = std::path::Path::new("/usr/share/keyd");
+    let candidate = data_dir.join(include_path);
+    if candidate.exists() {
+        return Ok(candidate.to_string_lossy().into_owned());
+    }
+    Err(format!("Failed to resolve include path: {}", include_path))
 }
 
 pub fn config_add_entry(config: &mut Config, exp: &str) -> Result<(), String> {

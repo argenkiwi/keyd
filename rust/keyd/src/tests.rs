@@ -106,8 +106,105 @@ mod tests {
     fn test_config_global_section() {
         let mut cfg = Config::new();
         config_parse_string(&mut cfg, "[ids]\n*\n\n[global]\nchord_timeout = 75\n\n[main]\n").unwrap();
-        // C code uses chord_interkey_timeout for chord_timeout if it was just an alias or renamed?
-        // Let's check config.c.
+        assert_eq!(cfg.chord_interkey_timeout, 75);
+    }
+
+    #[test]
+    fn test_default_timeouts() {
+        let cfg = Config::new();
+        assert_eq!(cfg.chord_interkey_timeout, 50);
+        assert_eq!(cfg.macro_timeout, 600);
+        assert_eq!(cfg.macro_repeat_timeout, 50);
+    }
+
+    #[test]
+    fn test_main_is_layout() {
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, "[ids]\n*\n\n[main]\n").unwrap();
+        let main_idx = config_get_layer_index(&cfg, "main").unwrap();
+        assert_eq!(cfg.layers[main_idx].layer_type, LayerType::Layout);
+    }
+
+    #[test]
+    fn test_wildcard_sets_field() {
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, "[ids]\n*\n\n[main]\n").unwrap();
+        assert_eq!(cfg.wildcard, 1);
+        assert!(cfg.ids.is_empty());
+    }
+
+    #[test]
+    fn test_exclusion_id_stored_without_prefix() {
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, "[ids]\n*\n-1234:5678\n\n[main]\n").unwrap();
+        assert_eq!(cfg.wildcard, 1);
+        assert_eq!(cfg.ids.len(), 1);
+        assert_eq!(cfg.ids[0].flags, ID_EXCLUDED);
+        assert_eq!(cfg.ids[0].id, "1234:5678");
+    }
+
+    #[test]
+    fn test_composite_layer_type_and_constituents() {
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\n\n[nav]\na = b\n\n[nav+control]\n"
+        ).unwrap();
+        let idx = config_get_layer_index(&cfg, "nav+control").unwrap();
+        assert_eq!(cfg.layers[idx].layer_type, LayerType::Composite);
+        assert_eq!(cfg.layers[idx].nr_constituents, 2);
+    }
+
+    #[test]
+    fn test_composite_layer_inherits_from_constituent() {
+        let mut cfg = Config::new();
+        // nav+control inherits a→b from nav; b→a is its own explicit entry
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\n\n[nav]\na = b\n\n[nav+control]\nb = a\n"
+        ).unwrap();
+        let idx = config_get_layer_index(&cfg, "nav+control").unwrap();
+
+        // explicit entry
+        if let DescriptorData::KeySequence(ks) = cfg.layers[idx].keymap[KEYD_B as usize].data {
+            assert_eq!(ks.code, KEYD_A, "explicit b→a");
+        } else {
+            panic!("Expected explicit b→a in composite");
+        }
+
+        // inherited from nav constituent
+        if let DescriptorData::KeySequence(ks) = cfg.layers[idx].keymap[KEYD_A as usize].data {
+            assert_eq!(ks.code, KEYD_B, "inherited a→b from nav");
+        } else {
+            panic!("Composite should inherit a→b from nav constituent");
+        }
+    }
+
+    #[test]
+    fn test_config_parse_file_with_include() {
+        let dir = std::env::temp_dir();
+        let main_path = dir.join("test_keyd_main.conf");
+        let inc_path = dir.join("test_keyd_inc.conf");
+
+        std::fs::write(&inc_path, "[extra-layer]\na = b\n").unwrap();
+
+        let main_content = format!(
+            "[ids]\n*\n\ninclude {}\n\n[main]\n",
+            inc_path.display()
+        );
+        std::fs::write(&main_path, &main_content).unwrap();
+
+        let cfg = config_parse(main_path.to_str().unwrap()).unwrap();
+
+        let _ = std::fs::remove_file(&main_path);
+        let _ = std::fs::remove_file(&inc_path);
+
+        let extra_idx = config_get_layer_index(&cfg, "extra-layer");
+        assert!(extra_idx.is_some(), "included layer should be present");
+        let idx = extra_idx.unwrap();
+        if let DescriptorData::KeySequence(ks) = cfg.layers[idx].keymap[KEYD_A as usize].data {
+            assert_eq!(ks.code, KEYD_B);
+        } else {
+            panic!("Expected a→b in included layer");
+        }
     }
 
     #[test]
