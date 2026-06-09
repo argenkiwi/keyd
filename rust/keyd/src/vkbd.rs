@@ -7,11 +7,11 @@ mod linux {
     use crate::keys::*;
     use libc::*;
 
-    const UI_SET_EVBIT: u64 = 1074025827;
-    const UI_SET_KEYBIT: u64 = 1074025828;
-    const UI_SET_RELBIT: u64 = 1074025829;
-    const UI_SET_ABSBIT: u64 = 1074025830;
-    const UI_SET_LEDBIT: u64 = 1074025831;
+    const UI_SET_EVBIT: u64 = 1074025828;
+    const UI_SET_KEYBIT: u64 = 1074025829;
+    const UI_SET_RELBIT: u64 = 1074025830;
+    const UI_SET_ABSBIT: u64 = 1074025831;
+    const UI_SET_LEDBIT: u64 = 1074025833;
     const UI_DEV_CREATE: u64 = 21761;
 
     const EV_SYN: u16 = 0x00;
@@ -119,7 +119,7 @@ mod linux {
             file.write_all(udev_slice).map_err(|e| e.to_string())?;
 
             if ioctl_no_arg(fd, UI_DEV_CREATE) < 0 {
-                return Err("Failed to create uinput device".to_string());
+                return Err(format!("Failed to create uinput device: {}", std::io::Error::last_os_error()));
             }
 
             Ok(file)
@@ -167,7 +167,7 @@ mod linux {
             file.write_all(udev_slice).map_err(|e| e.to_string())?;
 
             if ioctl_no_arg(fd, UI_DEV_CREATE) < 0 {
-                return Err("Failed to create uinput device".to_string());
+                return Err(format!("Failed to create uinput device: {}", std::io::Error::last_os_error()));
             }
 
             Ok(file)
