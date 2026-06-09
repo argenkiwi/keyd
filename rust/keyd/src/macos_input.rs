@@ -2,7 +2,7 @@
 //! macOS keyboard capture (CGEventTap) and injection (CGEventPost).
 
 use std::os::unix::io::RawFd;
-use libc::{c_void, c_long};
+use libc::{c_void, c_long, c_char};
 
 // ── FFI types ────────────────────────────────────────────────────────────────
 
@@ -474,6 +474,131 @@ pub fn post_key_repeat(cgkey: u16, key_states: &[u8; 128]) {
         CGEventSetIntegerValueField(ev, FIELD_SOURCE_USERDATA, KEYD_MARKER);
         CGEventPost(CG_HID_EVENT_TAP, ev);
         CFRelease(ev as CFTypeRef);
+    }
+}
+
+// ── AppKit / Objective-C runtime — media key injection ───────────────────────
+//
+// CGEventCreateKeyboardEvent does not trigger OS-level volume/brightness/media
+// actions on modern macOS. These keys require NX_SYSDEFINED events, which are
+// created via NSEvent.otherEventWithType:... from the AppKit framework.
+
+#[link(name = "AppKit", kind = "framework")]
+unsafe extern "C" {}
+
+#[link(name = "objc")]
+unsafe extern "C" {
+    fn objc_getClass(name: *const c_char) -> *const c_void;
+    fn sel_registerName(name: *const c_char) -> *const c_void;
+
+    // objc_msgSend typed for [NSEvent otherEventWithType:location:modifierFlags:
+    //                          timestamp:windowNumber:context:subtype:data1:data2:]
+    #[link_name = "objc_msgSend"]
+    fn ns_event_other_event(
+        receiver:   *const c_void,
+        sel:        *const c_void,
+        ty:         u64,     // NSEventType (NSUInteger)
+        loc_x:      f64,     // NSPoint.x  (CGFloat)
+        loc_y:      f64,     // NSPoint.y  (CGFloat)
+        flags:      u64,     // NSEventModifierFlags (NSUInteger)
+        timestamp:  f64,     // NSTimeInterval (double)
+        window_num: isize,   // NSInteger
+        context:    *const c_void,  // NSGraphicsContext* (nullable)
+        subtype:    i32,     // NSEventSubtype (short, promoted to int in C ABI)
+        data1:      isize,   // NSInteger
+        data2:      isize,   // NSInteger
+    ) -> *const c_void;     // NSEvent*
+
+    // objc_msgSend typed for [nsEvent CGEvent]
+    #[allow(clashing_extern_declarations)]
+    #[link_name = "objc_msgSend"]
+    fn ns_event_get_cgevent(
+        receiver: *const c_void,
+        sel:      *const c_void,
+    ) -> CGEventRef;
+}
+
+// NX media-key types (from IOKit/hidsystem/ev_keymap.h)
+const NX_KEYTYPE_SOUND_UP:        isize = 0;
+const NX_KEYTYPE_SOUND_DOWN:      isize = 1;
+const NX_KEYTYPE_BRIGHTNESS_UP:   isize = 2;
+const NX_KEYTYPE_BRIGHTNESS_DOWN: isize = 3;
+const NX_KEYTYPE_MUTE:            isize = 7;
+const NX_KEYTYPE_PLAY:            isize = 16;
+const NX_KEYTYPE_NEXT:            isize = 17;
+const NX_KEYTYPE_PREVIOUS:        isize = 18;
+
+/// Map a keyd code to its NX media-key type, if it is a media/system key.
+pub fn keyd_to_nx_keytype(keyd: u8) -> Option<isize> {
+    use crate::keys::{
+        KEYD_VOLUMEUP, KEYD_VOLUMEDOWN, KEYD_MUTE,
+        KEYD_PLAYPAUSE, KEYD_NEXTSONG, KEYD_PREVIOUSSONG,
+        KEYD_BRIGHTNESSUP, KEYD_BRIGHTNESSDOWN,
+    };
+    match keyd {
+        KEYD_VOLUMEUP       => Some(NX_KEYTYPE_SOUND_UP),
+        KEYD_VOLUMEDOWN     => Some(NX_KEYTYPE_SOUND_DOWN),
+        KEYD_MUTE           => Some(NX_KEYTYPE_MUTE),
+        KEYD_PLAYPAUSE      => Some(NX_KEYTYPE_PLAY),
+        KEYD_NEXTSONG       => Some(NX_KEYTYPE_NEXT),
+        KEYD_PREVIOUSSONG   => Some(NX_KEYTYPE_PREVIOUS),
+        KEYD_BRIGHTNESSUP   => Some(NX_KEYTYPE_BRIGHTNESS_UP),
+        KEYD_BRIGHTNESSDOWN => Some(NX_KEYTYPE_BRIGHTNESS_DOWN),
+        _                   => None,
+    }
+}
+
+/// Inject a media/system key via NSEvent NX_SYSDEFINED.
+///
+/// Volume, brightness, play/pause, next, previous keys cannot be injected via
+/// CGEventCreateKeyboardEvent on modern macOS. They require NX_SYSDEFINED events.
+pub fn post_media_key(nx_type: isize, pressed: bool) {
+    unsafe {
+        let class = objc_getClass(b"NSEvent\0".as_ptr() as *const _);
+        if class.is_null() {
+            log::error!("keyd: NSEvent class unavailable");
+            return;
+        }
+
+        let sel = sel_registerName(
+            b"otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:\0"
+                .as_ptr() as *const _,
+        );
+
+        // data1 = (nx_type << 16) | (direction << 8)
+        //   direction: 0xa = key-down, 0xb = key-up
+        let direction: isize = if pressed { 0xa } else { 0xb };
+        let data1: isize     = (nx_type << 16) | (direction << 8);
+
+        let ns_event = ns_event_other_event(
+            class,
+            sel,
+            14u64,              // NSEventTypeSystemDefined = 14
+            0.0,
+            0.0,
+            0xa00u64,           // standard modifierFlags for media keys
+            0.0,
+            0isize,
+            std::ptr::null(),   // context = nil
+            8i32,               // NX_SUBTYPE_AUX_CONTROL_BUTTONS = 8
+            data1,
+            -1isize,
+        );
+
+        if ns_event.is_null() {
+            log::warn!("keyd: failed to create NSEvent for media key nx_type={}", nx_type);
+            return;
+        }
+
+        let cg_sel   = sel_registerName(b"CGEvent\0".as_ptr() as *const _);
+        let cg_event = ns_event_get_cgevent(ns_event, cg_sel);
+
+        if cg_event.is_null() {
+            log::warn!("keyd: NSEvent.CGEvent is null for nx_type={}", nx_type);
+            return;
+        }
+
+        CGEventPost(CG_HID_EVENT_TAP, cg_event);
     }
 }
 

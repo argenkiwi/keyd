@@ -325,6 +325,14 @@ mod macos_vkbd {
         }
 
         pub fn send_key(&self, code: u8, state: u8) {
+            // Media/system keys need NX_SYSDEFINED events on macOS.
+            // CGEventCreateKeyboardEvent does not trigger volume/brightness/media
+            // actions, and play/next/prev have no CGKey mapping at all.
+            if let Some(nx_type) = macos_input::keyd_to_nx_keytype(code) {
+                macos_input::post_media_key(nx_type, state != 0);
+                return;
+            }
+
             let cgkey = match macos_input::keyd_to_cgkey_code(code) {
                 Some(k) => k,
                 None    => return,
