@@ -38,8 +38,8 @@ const CG_HEAD_INSERT:   u32 = 0;
 const CG_TAP_DEFAULT:   u32 = 0;
 
 const FIELD_KBD_KEYCODE:      CGEventField = 9;
-const FIELD_KBD_AUTOREPEAT:   CGEventField = 10;
-const FIELD_SOURCE_USERDATA:  CGEventField = 40;
+const FIELD_KBD_AUTOREPEAT:   CGEventField = 8;
+const FIELD_SOURCE_USERDATA:  CGEventField = 42;
 
 // UTF-8 encoding value used by CFString.
 const CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
@@ -351,7 +351,10 @@ pub fn tap_init() -> RawFd {
     assert!(unsafe { libc::pipe(fds.as_mut_ptr()) } == 0, "pipe() failed");
     let read_fd  = fds[0];
     let write_fd = fds[1];
-    unsafe { libc::fcntl(read_fd, libc::F_SETFL, libc::O_NONBLOCK) };
+    unsafe {
+        libc::fcntl(read_fd, libc::F_SETFL, libc::O_NONBLOCK);
+        libc::fcntl(write_fd, libc::F_SETFL, libc::O_NONBLOCK);
+    };
 
     // Cast to usize so the closure is Send (usize is Send; *mut is not).
     let ctx_addr: usize = Box::into_raw(Box::new(TapCtx {
@@ -398,12 +401,24 @@ pub fn tap_init() -> RawFd {
     read_fd
 }
 
+#[derive(Debug, PartialEq)]
+pub enum TapReadResult {
+    Ok(u16, u8),
+    None,
+    EOF,
+}
+
 /// Non-blocking read of one pending event from the tap pipe.
-pub fn tap_read(fd: RawFd) -> Option<(u16, u8)> {
+pub fn tap_read(fd: RawFd) -> TapReadResult {
     let mut buf = [0u8; 3];
     let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut c_void, 3) };
-    if n < 3 { return None; }
-    Some((u16::from_be_bytes([buf[0], buf[1]]), buf[2]))
+    if n == 0 {
+        return TapReadResult::EOF;
+    }
+    if n < 3 {
+        return TapReadResult::None;
+    }
+    TapReadResult::Ok(u16::from_be_bytes([buf[0], buf[1]]), buf[2])
 }
 
 /// Read the system key-repeat delay and interval (both in milliseconds).

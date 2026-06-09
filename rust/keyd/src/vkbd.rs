@@ -261,7 +261,6 @@ pub use linux::Vkbd;
 
 #[cfg(target_os = "macos")]
 mod macos_vkbd {
-    use std::cell::UnsafeCell;
     use std::sync::{Arc, Mutex, Condvar};
     use crate::macos_input;
 
@@ -271,64 +270,58 @@ mod macos_vkbd {
         revision:   u32,
     }
 
-    pub struct Vkbd {
-        key_states: UnsafeCell<[u8; 128]>,
-        repeat:     Arc<(Mutex<RepeatState>, Condvar)>,
+    struct SharedState {
+        repeat:     RepeatState,
+        key_states: [u8; 128],
     }
 
-    // send_key is only called from the main daemon thread; the repeat thread
-    // only calls post_key_repeat with a zeroed state snapshot.
-    unsafe impl Sync for Vkbd {}
-    unsafe impl Send for Vkbd {}
+    pub struct Vkbd {
+        shared: Arc<(Mutex<SharedState>, Condvar)>,
+    }
 
     impl Vkbd {
         pub fn init(_name: &str) -> Result<Self, String> {
-            let repeat = Arc::new((
-                Mutex::new(RepeatState { key: 0, armed: false, revision: 0 }),
+            let shared = Arc::new((
+                Mutex::new(SharedState {
+                    repeat: RepeatState { key: 0, armed: false, revision: 0 },
+                    key_states: [0u8; 128],
+                }),
                 Condvar::new(),
             ));
 
-            let repeat_clone = Arc::clone(&repeat);
+            let shared_clone = Arc::clone(&shared);
             std::thread::spawn(move || {
                 let (delay_ms, interval_ms) = macos_input::get_repeat_settings();
-                let (lock, cvar) = &*repeat_clone;
+                let (lock, cvar) = &*shared_clone;
 
                 loop {
                     // Wait until a key is armed.
                     let (rev, key) = {
                         let mut st = lock.lock().unwrap();
-                        while !st.armed {
+                        while !st.repeat.armed {
                             st = cvar.wait(st).unwrap();
                         }
-                        (st.revision, st.key)
+                        (st.repeat.revision, st.repeat.key)
                     };
 
                     std::thread::sleep(std::time::Duration::from_millis(delay_ms));
 
-                    // If cancelled during the delay, restart.
-                    if lock.lock().unwrap().revision != rev {
-                        continue;
-                    }
-
                     // Fire repeats at the system interval until cancelled.
                     loop {
-                        if lock.lock().unwrap().revision != rev {
+                        let st = lock.lock().unwrap();
+                        if st.repeat.revision != rev {
                             break;
                         }
-                        // Modifier flags for the repeat event come from the
-                        // system's own modifier state (set via the FlagsChanged
-                        // events already posted).  Pass a zeroed state so we
-                        // don't double-apply them.
-                        macos_input::post_key_repeat(key, &[0u8; 128]);
+                        let key_states = st.key_states;
+                        drop(st);
+
+                        macos_input::post_key_repeat(key, &key_states);
                         std::thread::sleep(std::time::Duration::from_millis(interval_ms));
                     }
                 }
             });
 
-            Ok(Vkbd {
-                key_states: UnsafeCell::new([0u8; 128]),
-                repeat,
-            })
+            Ok(Vkbd { shared })
         }
 
         pub fn send_key(&self, code: u8, state: u8) {
@@ -336,26 +329,30 @@ mod macos_vkbd {
                 Some(k) => k,
                 None    => return,
             };
-            unsafe {
-                let states = &mut *self.key_states.get();
+
+            let (lock, cvar) = &*self.shared;
+            {
+                let mut st = lock.lock().unwrap();
                 if (cgkey as usize) < 128 {
-                    states[cgkey as usize] = state;
+                    st.key_states[cgkey as usize] = state;
                 }
-                macos_input::post_key(cgkey, state != 0, states);
+                let key_states = st.key_states;
+                drop(st);
+
+                macos_input::post_key(cgkey, state != 0, &key_states);
             }
 
             // Arm or cancel the software repeat timer for non-modifier keys.
             if !macos_input::is_modifier_cgkey(cgkey) {
-                let (lock, cvar) = &*self.repeat;
                 let mut st = lock.lock().unwrap();
                 if state != 0 {
-                    st.key       = cgkey;
-                    st.armed     = true;
-                    st.revision += 1;
+                    st.repeat.key       = cgkey;
+                    st.repeat.armed     = true;
+                    st.repeat.revision += 1;
                     cvar.notify_one();
-                } else if st.key == cgkey && st.armed {
-                    st.armed     = false;
-                    st.revision += 1;
+                } else if st.repeat.key == cgkey && st.repeat.armed {
+                    st.repeat.armed     = false;
+                    st.repeat.revision += 1;
                 }
             }
         }

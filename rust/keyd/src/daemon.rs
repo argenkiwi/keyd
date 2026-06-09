@@ -381,17 +381,26 @@ impl Daemon {
             let poll_timeout = if timeout_ms < 0 { -1i32 }
                                else { timeout_ms.min(i32::MAX as i64) as i32 };
             let poll_start = current_time_ms();
-            unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, poll_timeout) };
+            let poll_ret = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, poll_timeout) };
             let now     = current_time_ms();
             let elapsed = now - poll_start;
+
+            if poll_ret < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() != std::io::ErrorKind::Interrupted {
+                    eprintln!("ERROR: poll failed: {}", err);
+                }
+                continue;
+            }
 
             // ── Keyboard timeout ──────────────────────────────────────────
             if timeout_ms >= 0 {
                 timeout_ms -= elapsed;
                 if timeout_ms <= 0 {
                     let mut next: i64 = -1;
+                    let ev = KeyEvent { code: 0, pressed: 0, timestamp: now as i32 };
                     for ki in 0..self.keyboards.len() {
-                        let t = self.dispatch_kbd(ki, &[]);
+                        let t = self.dispatch_kbd(ki, &[ev]);
                         if t > 0 { next = if next < 0 { t } else { next.min(t) }; }
                     }
                     timeout_ms = next;

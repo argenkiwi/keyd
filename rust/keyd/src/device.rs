@@ -485,9 +485,17 @@ impl Device {
     pub fn set_led(&self, _led: u8, _state: bool) {}
 
     pub fn read_event(&mut self) -> Option<DeviceEvent> {
-        let (cgkey, pressed) = crate::macos_input::tap_read(self.fd)?;
-        let code = crate::macos_input::cgkey_to_keyd_code(cgkey)?;
-        Some(DeviceEvent { event_type: DeviceEventType::Key, code, pressed, x: 0, y: 0 })
+        match crate::macos_input::tap_read(self.fd) {
+            crate::macos_input::TapReadResult::Ok(cgkey, pressed) => {
+                let code = crate::macos_input::cgkey_to_keyd_code(cgkey)?;
+                Some(DeviceEvent { event_type: DeviceEventType::Key, code, pressed, x: 0, y: 0 })
+            }
+            crate::macos_input::TapReadResult::EOF => {
+                self.fd = -1;
+                Some(DeviceEvent { event_type: DeviceEventType::Removed, code: 0, pressed: 0, x: 0, y: 0 })
+            }
+            crate::macos_input::TapReadResult::None => None,
+        }
     }
 }
 
