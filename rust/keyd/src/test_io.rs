@@ -134,6 +134,291 @@ mod tests {
         assert_eq!(h_events[0].code, KEYD_H);
     }
 
+    // ── Phase 9: macros ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_macro_types_hello() {
+        // a = macro(hello) should emit h, e, l, l, o key presses
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, "[ids]\n*\n\n[main]\na = macro(hello)\n").unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_A, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_A, pressed: 0, timestamp: 10 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let down: Vec<u8> = output.events.iter()
+            .filter(|e| e.pressed != 0)
+            .map(|e| e.code)
+            .collect();
+
+        assert!(down.contains(&KEYD_H), "macro should emit h");
+        assert!(down.contains(&KEYD_E), "macro should emit e");
+        assert!(down.contains(&KEYD_L), "macro should emit l");
+        assert!(down.contains(&KEYD_O), "macro should emit o");
+    }
+
+    #[test]
+    fn test_macro_simple_key_sequence() {
+        // Single-keysequence macro shortcut path: a = C-c should emit ctrl+c
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, "[ids]\n*\n\n[main]\na = macro(C-c)\n").unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_A, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_A, pressed: 0, timestamp: 10 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let codes: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(codes.contains(&KEYD_LEFTCTRL), "C-c macro should press ctrl");
+        assert!(codes.contains(&KEYD_C), "C-c macro should press c");
+    }
+
+    // ── Phase 8: chords ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_chord_fires_when_both_keys_pressed() {
+        // j+k = esc: pressing j then k within chord_interkey_timeout → escape
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\nj+k = esc\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        // Both keys pressed within default chord_interkey_timeout (50ms).
+        let events = [
+            KeyEvent { code: KEYD_J, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_K, pressed: 1, timestamp: 10 },
+            KeyEvent { code: KEYD_J, pressed: 0, timestamp: 20 },
+            KeyEvent { code: KEYD_K, pressed: 0, timestamp: 20 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let codes: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(codes.contains(&KEYD_ESC), "j+k chord should produce escape");
+        assert!(!codes.contains(&KEYD_J), "j must not appear as individual key");
+        assert!(!codes.contains(&KEYD_K), "k must not appear as individual key");
+    }
+
+    #[test]
+    fn test_chord_aborts_on_release_before_complete() {
+        // j+k = esc: releasing j before k is pressed → j and k fire individually
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\nj+k = esc\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        // j pressed then released without k → abort, j fires normally
+        let events = [
+            KeyEvent { code: KEYD_J, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_J, pressed: 0, timestamp: 10 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let codes: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(codes.contains(&KEYD_J), "j must fire normally on abort");
+        assert!(!codes.contains(&KEYD_ESC), "escape must not fire when chord is incomplete");
+    }
+
+    #[test]
+    fn test_chord_aborts_on_interkey_timeout() {
+        // j+k = esc: k arrives after chord_interkey_timeout → abort, j fires first
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\nj+k = esc\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        // k arrives at t=100, past the default interkey_timeout of 50ms.
+        // kbd_process_events will inject the timeout tick at t=50 first, aborting the chord.
+        let events = [
+            KeyEvent { code: KEYD_J, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_K, pressed: 1, timestamp: 100 },
+            KeyEvent { code: KEYD_J, pressed: 0, timestamp: 100 },
+            KeyEvent { code: KEYD_K, pressed: 0, timestamp: 100 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let codes: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(codes.contains(&KEYD_J), "j must fire as individual key after timeout");
+        assert!(!codes.contains(&KEYD_ESC), "escape must not fire after interkey timeout");
+    }
+
+    // ── Phase 7: timeout ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_timeout_tap_fires_action1() {
+        // x = timeout(a, 200, layer(nav)): quick tap → 'a'
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\nx = timeout(a, 200, layer(nav))\n\n[nav]\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        // Press and release x in the same tick (spontaneous). Then press b so the
+        // timeout resolver sees an event and fires action1.
+        let events = [
+            KeyEvent { code: KEYD_X, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_X, pressed: 0, timestamp: 0 }, // same tick → spontaneous
+            KeyEvent { code: KEYD_B, pressed: 1, timestamp: 50 }, // triggers resolution
+            KeyEvent { code: KEYD_B, pressed: 0, timestamp: 50 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let codes: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(codes.contains(&KEYD_A), "tap should produce 'a' (action1)");
+        assert!(!codes.contains(&KEYD_LEFT), "nav layer must not activate on tap");
+    }
+
+    #[test]
+    fn test_timeout_hold_fires_action2() {
+        // x = timeout(a, 200, layer(nav)): hold past deadline → layer(nav), h→left
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\nx = timeout(a, 200, layer(nav))\n\n[nav]\nh = left\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        // h arrives at t=300, past the 200ms deadline; kbd_process_events injects a
+        // synthetic timeout tick at t=200 before processing h.
+        let events = [
+            KeyEvent { code: KEYD_X, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_H, pressed: 1, timestamp: 300 },
+            KeyEvent { code: KEYD_H, pressed: 0, timestamp: 300 },
+            KeyEvent { code: KEYD_X, pressed: 0, timestamp: 350 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        let codes: Vec<u8> = output.events.iter().map(|e| e.code).collect();
+        assert!(codes.contains(&KEYD_LEFT), "hold should activate nav → h=left");
+        assert!(!codes.contains(&KEYD_A), "'a' must not appear on hold");
+    }
+
+    // ── Phase 6: oneshot ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_oneshot_tap_shifts_one_key() {
+        // capslock = oneshot(shift): only the first key after the tap is shifted.
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\ncapslock = oneshot(shift)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            // Tap the oneshot key.
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 0, timestamp: 10 },
+            // Press A — should be shifted.
+            KeyEvent { code: KEYD_A,        pressed: 1, timestamp: 20 },
+            KeyEvent { code: KEYD_A,        pressed: 0, timestamp: 30 },
+            // Press B — should NOT be shifted (oneshot consumed).
+            KeyEvent { code: KEYD_B,        pressed: 1, timestamp: 40 },
+            KeyEvent { code: KEYD_B,        pressed: 0, timestamp: 50 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        // Shift must be down before A and up after A.
+        let shift_downs: Vec<_> = output.events.iter()
+            .enumerate()
+            .filter(|(_, e)| e.code == KEYD_LEFTSHIFT && e.pressed != 0)
+            .collect();
+        assert_eq!(shift_downs.len(), 1, "shift should go down exactly once");
+
+        // A must come after the shift-down.
+        let a_down_idx = output.events.iter().position(|e| e.code == KEYD_A && e.pressed != 0)
+            .expect("A down must be emitted");
+        let shift_down_idx = shift_downs[0].0;
+        assert!(shift_down_idx < a_down_idx, "shift must precede A");
+
+        // B must not be preceded by a shift in this batch.
+        let b_down_idx = output.events.iter().position(|e| e.code == KEYD_B && e.pressed != 0)
+            .expect("B down must be emitted");
+        let shift_after_a: bool = output.events[a_down_idx + 1..b_down_idx]
+            .iter().any(|e| e.code == KEYD_LEFTSHIFT && e.pressed != 0);
+        assert!(!shift_after_a, "shift must not re-appear before B");
+    }
+
+    #[test]
+    fn test_oneshot_hold_acts_as_regular_modifier() {
+        // Holding the oneshot key while pressing A: acts as a regular modifier (not oneshot).
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[main]\ncapslock = oneshot(shift)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 1, timestamp: 0 },
+            // A while capslock still held.
+            KeyEvent { code: KEYD_A,        pressed: 1, timestamp: 10 },
+            KeyEvent { code: KEYD_A,        pressed: 0, timestamp: 20 },
+            // Release capslock.
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 0, timestamp: 30 },
+            // B — should NOT be shifted.
+            KeyEvent { code: KEYD_B,        pressed: 1, timestamp: 40 },
+            KeyEvent { code: KEYD_B,        pressed: 0, timestamp: 50 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        assert!(output.events.iter().any(|e| e.code == KEYD_LEFTSHIFT), "shift must appear (modifier hold)");
+        assert!(output.events.iter().any(|e| e.code == KEYD_A), "A must be emitted");
+
+        // After capslock release and A, B must not be shifted.
+        let b_down_idx = output.events.iter().position(|e| e.code == KEYD_B && e.pressed != 0)
+            .expect("B down must be emitted");
+        let shift_up_before_b = output.events[..b_down_idx]
+            .iter().rev()
+            .find(|e| e.code == KEYD_LEFTSHIFT);
+        if let Some(last_shift) = shift_up_before_b {
+            assert_eq!(last_shift.pressed, 0, "shift must be released before B");
+        }
+    }
+
+    #[test]
+    fn test_oneshot_timeout_clears() {
+        // oneshot_timeout: if the next key isn't pressed quickly enough, cancel oneshot.
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg,
+            "[ids]\n*\n\n[global]\noneshot_timeout = 100\n\n[main]\ncapslock = oneshot(shift)\n"
+        ).unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_CAPSLOCK, pressed: 0, timestamp: 10 },
+            // A arrives after the timeout — should NOT be shifted.
+            KeyEvent { code: KEYD_A,        pressed: 1, timestamp: 200 },
+            KeyEvent { code: KEYD_A,        pressed: 0, timestamp: 210 },
+        ];
+        kbd.kbd_process_events(&mut output, &events);
+
+        // Shift must not be active when A is pressed (timeout already fired).
+        let a_down_idx = output.events.iter().position(|e| e.code == KEYD_A && e.pressed != 0)
+            .expect("A must be emitted");
+        let shift_at_a = output.events[..a_down_idx]
+            .iter().rev()
+            .find(|e| e.code == KEYD_LEFTSHIFT);
+        if let Some(last_shift) = shift_at_a {
+            assert_eq!(last_shift.pressed, 0, "shift must be released before A (timeout fired)");
+        }
+    }
+
     #[test]
     fn test_overload_tap() {
         // capslock = overload(control, esc): quick tap → ESC

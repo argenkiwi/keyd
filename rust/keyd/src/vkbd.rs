@@ -200,6 +200,45 @@ mod linux {
             self.write_event(fd, EV_SYN, 0, 0);
         }
 
+        /// Raw fd of the virtual keyboard uinput device (for reading LED feedback).
+        pub fn keyboard_fd(&self) -> RawFd {
+            self.fd.as_raw_fd()
+        }
+
+        /// Read one EV_LED event from the uinput keyboard fd.
+        /// Returns `(led_code, state)` or `None` if nothing is available.
+        pub fn read_led_event(&self) -> Option<(u8, bool)> {
+            #[repr(C)]
+            struct Ev { time: libc::timeval, type_: u16, code: u16, value: i32 }
+            let mut ev: Ev = unsafe { std::mem::zeroed() };
+            let n = unsafe {
+                libc::read(self.fd.as_raw_fd(),
+                           &mut ev as *mut _ as *mut c_void,
+                           std::mem::size_of::<Ev>())
+            };
+            if n == std::mem::size_of::<Ev>() as isize && ev.type_ == EV_LED {
+                Some((ev.code as u8, ev.value != 0))
+            } else {
+                None
+            }
+        }
+
+        pub fn mouse_move(&self, x: i32, y: i32) {
+            let _lock = self.mtx.lock().unwrap();
+            let fd = self.pfd.as_raw_fd();
+            if x != 0 { self.write_event(fd, EV_REL, REL_X, x); }
+            if y != 0 { self.write_event(fd, EV_REL, REL_Y, y); }
+            if x != 0 || y != 0 { self.write_event(fd, EV_SYN, 0, 0); }
+        }
+
+        pub fn mouse_scroll(&self, x: i32, y: i32) {
+            let _lock = self.mtx.lock().unwrap();
+            let fd = self.pfd.as_raw_fd();
+            if y != 0 { self.write_event(fd, EV_REL, REL_WHEEL, y); }
+            if x != 0 { self.write_event(fd, EV_REL, REL_HWHEEL, x); }
+            if x != 0 || y != 0 { self.write_event(fd, EV_SYN, 0, 0); }
+        }
+
         fn write_event(&self, fd: RawFd, type_: u16, code: u16, value: i32) {
             let mut ev: input_event = unsafe { std::mem::zeroed() };
             ev.type_ = type_;
@@ -320,6 +359,9 @@ mod macos_vkbd {
                 }
             }
         }
+
+        pub fn mouse_move(&self, _x: i32, _y: i32) {}
+        pub fn mouse_scroll(&self, _x: i32, _y: i32) {}
     }
 }
 
@@ -339,4 +381,6 @@ impl Vkbd {
     pub fn send_key(&self, code: u8, state: u8) {
         log::info!("vkbd: stub send_key code={} state={}", code, state);
     }
+    pub fn mouse_move(&self, _x: i32, _y: i32) {}
+    pub fn mouse_scroll(&self, _x: i32, _y: i32) {}
 }

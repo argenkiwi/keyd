@@ -18,7 +18,17 @@ impl Keyboard {
             last_simple_key_time: 0,
             timeouts: [0; 128],
             nr_timeouts: 0,
-            active_chords: Vec::new(),
+            active_chords: {
+                const E: ActiveChord = ActiveChord {
+                    active: 0,
+                    chord: Chord {
+                        keys: [0; 8], sz: 0,
+                        d: Descriptor { op: Op::KeySequence, data: DescriptorData::None },
+                    },
+                    layer: 0,
+                };
+                vec![E; 8]
+            },
             chord: ChordState {
                 queue: [KeyEvent { code: 0, pressed: 0, timestamp: 0 }; 32],
                 queue_sz: 0,
@@ -78,8 +88,15 @@ impl Keyboard {
         None
     }
 
-    fn clear_oneshot(&mut self) {
-        // Full implementation in Phase 6 (oneshot state machine).
+    fn clear_oneshot<O: Output>(&mut self, output: &mut O) {
+        for i in 0..self.config.layers.len() {
+            while self.layer_state[i].oneshot_depth > 0 {
+                self.deactivate_layer(output, i);
+                self.layer_state[i].oneshot_depth -= 1;
+            }
+        }
+        self.oneshot_latch = 0;
+        self.oneshot_timeout = 0;
     }
 
     fn calculate_main_loop_timeout(&mut self, time: i64) -> i64 {
@@ -211,7 +228,7 @@ impl Keyboard {
     }
 
     fn clear<O: Output>(&mut self, output: &mut O) {
-        self.clear_oneshot();
+        self.clear_oneshot(output);
         for i in 1..self.config.layers.len() {
             if self.config.layers[i].layer_type != LayerType::Layout {
                 if self.layer_state[i].toggled != 0 {
@@ -294,7 +311,378 @@ impl Keyboard {
         final_mods
     }
 
+    fn handle_pending_timeout<O: Output>(&mut self, output: &mut O, code: u8, pressed: u8, time: i64) {
+        // Snapshot fields we need; return early if nothing pending or if this is the
+        // same-tick release (Op::Timeout release handler will set spontaneous=1 instead).
+        let (pt_code, pt_dl, pt_spontaneous, pt_expiration, pt_action1, pt_action2) =
+            match self.pending_timeout.as_ref() {
+                None => return,
+                Some(pt) => {
+                    if pressed == 0 && pt.code == code && time == pt.activation_time {
+                        return;
+                    }
+                    (pt.code, pt.dl, pt.spontaneous, pt.expiration, pt.action1, pt.action2)
+                }
+            };
+
+        // Determine if and how to resolve.
+        let resolve: Option<(Descriptor, bool)> = if pt_spontaneous != 0 {
+            // Key was released in the same tick as pressed.
+            // Resolve once we see any subsequent event OR the deadline passes.
+            if time >= pt_expiration || code != 0 {
+                let action = if time >= pt_expiration { pt_action2 } else { pt_action1 };
+                Some((action, true)) // true → fire both press AND release (key already up)
+            } else {
+                None
+            }
+        } else if time >= pt_expiration
+            || (code != 0 && (pressed != 0 || code == pt_code))
+        {
+            // Normal resolution: timeout expired, or another key arrived while held.
+            let action = if time >= pt_expiration { pt_action2 } else { pt_action1 };
+            Some((action, false)) // false → fire press only; release comes on key-up
+        } else {
+            None
+        };
+
+        if let Some((action, both)) = resolve {
+            let dl = pt_dl as i32;
+            self.pending_timeout = None;
+
+            if both {
+                // Spontaneous tap: fire press + release immediately.
+                self.execute_descriptor(output, action, pt_code, dl, 1, time);
+                self.execute_descriptor(output, action, pt_code, dl, 0, time);
+            } else {
+                // Hold: write cache so the eventual key-up releases correctly.
+                self.cache_set(pt_code, Some(CacheEntry { code: pt_code, d: action, dl, layer: 0 }));
+                self.execute_descriptor(output, action, pt_code, dl, 1, time);
+            }
+        }
+    }
+
+    // ── Macro execution ───────────────────────────────────────────────────────
+
+    /// Low-level macro runner: sends keys via `output`, returns total elapsed ms.
+    pub fn macro_execute<O: Output>(output: &mut O, mac: &crate::macro_types::Macro, seq_timeout_us: u64) -> i64 {
+        use crate::macro_types::MacroEntryType;
+        let mut hold_start: Option<usize> = None;
+        let mut elapsed_ms: i64 = 0;
+
+        for i in 0..mac.sz as usize {
+            let ent = mac.entries[i];
+            match ent.entry_type {
+                MacroEntryType::Hold => {
+                    if hold_start.is_none() { hold_start = Some(i); }
+                    output.send_key(ent.data as u8, 1);
+                }
+                MacroEntryType::Release => {
+                    if let Some(start) = hold_start.take() {
+                        for j in start..i {
+                            output.send_key(mac.entries[j].data as u8, 0);
+                        }
+                    }
+                }
+                MacroEntryType::Unicode => {
+                    let codes = crate::unicode::unicode_get_sequence(ent.data as usize);
+                    for &c in &codes {
+                        if c != 0 { output.send_key(c, 1); output.send_key(c, 0); }
+                    }
+                }
+                MacroEntryType::KeySequence => {
+                    let code = (ent.data & 0xFF) as u8;
+                    let mods = (ent.data >> 8) as u8;
+                    for md in &MODIFIERS { if mods & md.mask != 0 { output.send_key(md.key, 1); } }
+                    if mods != 0 && seq_timeout_us > 0 {
+                        std::thread::sleep(std::time::Duration::from_micros(seq_timeout_us));
+                    }
+                    output.send_key(code, 1);
+                    output.send_key(code, 0);
+                    for md in &MODIFIERS { if mods & md.mask != 0 { output.send_key(md.key, 0); } }
+                }
+                MacroEntryType::Timeout => {
+                    let ms = ent.data as u64;
+                    if ms > 0 { std::thread::sleep(std::time::Duration::from_millis(ms)); }
+                    elapsed_ms += ms as i64;
+                }
+            }
+            if seq_timeout_us > 0 {
+                std::thread::sleep(std::time::Duration::from_micros(seq_timeout_us));
+                elapsed_ms += (seq_timeout_us / 1000) as i64;
+            }
+        }
+
+        elapsed_ms
+    }
+
+    /// High-level macro executor: handles single-entry shortcut and modifier bookkeeping.
+    fn execute_macro<O: Output>(&mut self, output: &mut O, layer: i32, macro_idx: usize) -> i64 {
+        use crate::macro_types::MacroEntryType;
+        let mac = self.config.macros[macro_idx]; // Copy (Macro: Copy)
+        let seq_us = self.config.macro_sequence_timeout as u64 * 1000;
+
+        if mac.sz == 1 && mac.entries[0].entry_type == MacroEntryType::KeySequence {
+            let entry = mac.entries[0];
+            let code = (entry.data & 0xFF) as u8;
+            let mods = (entry.data >> 8) as u8;
+            self.update_mods(output, layer, mods);
+            self.send_key(output, code, 1);
+            self.send_key(output, code, 0);
+            self.update_mods(output, -1, 0);
+            return 0;
+        }
+
+        self.update_mods(output, -1, 0);
+        let elapsed = Self::macro_execute(output, &mac, seq_us);
+        self.update_mods(output, -1, 0);
+        elapsed
+    }
+
+    // ── Chord helpers ─────────────────────────────────────────────────────────
+
+    /// Returns 0 = no match, 1 = partial, 2 = exact.
+    fn chord_event_match(chord: &Chord, events: &[KeyEvent]) -> i32 {
+        if events.is_empty() { return 0; }
+        let mut n = 0usize;
+        let mut npressed = 0usize;
+        for ev in events {
+            if ev.pressed != 0 {
+                npressed += 1;
+                if !chord.keys[..chord.sz].contains(&ev.code) {
+                    return 0;
+                }
+                n += 1;
+            }
+        }
+        if npressed == 0 { 0 } else if n == chord.sz { 2 } else { 1 }
+    }
+
+    /// Returns (ret, chord_idx, match_layer).
+    /// ret: 0=none, 1=partial, 2=unambiguous full, 3=ambiguous.
+    fn check_chord_match(&self) -> (i32, Option<usize>, i32) {
+        let queue = &self.chord.queue[..self.chord.queue_sz];
+        let mut full = false;
+        let mut partial = false;
+        let mut best_ci: Option<usize> = None;
+        let mut best_layer: i32 = -1;
+        let mut max_ts: i64 = -1;
+
+        for li in 0..self.config.layers.len() {
+            if self.layer_state[li].active == 0 { continue; }
+            let layer = &self.config.layers[li];
+            for ci in 0..layer.nr_chords {
+                let r = Self::chord_event_match(&layer.chords[ci], queue);
+                if r == 2 && self.layer_state[li].activation_time >= max_ts {
+                    best_ci = Some(ci);
+                    best_layer = li as i32;
+                    full = true;
+                    max_ts = self.layer_state[li].activation_time;
+                } else if r == 1 {
+                    partial = true;
+                }
+            }
+        }
+
+        let ret = if full { if partial { 3 } else { 2 } } else if partial { 1 } else { 0 };
+        (ret, best_ci, best_layer)
+    }
+
+    fn enqueue_chord_event(&mut self, code: u8, pressed: u8, time: i64) {
+        if code == 0 { return; }
+        let sz = self.chord.queue_sz;
+        if sz < self.chord.queue.len() {
+            self.chord.queue[sz] = KeyEvent { code, pressed, timestamp: time as i32 };
+            self.chord.queue_sz += 1;
+        }
+    }
+
+    fn resolve_chord<O: Output>(&mut self, output: &mut O) -> bool {
+        self.chord.state = ChordStatus::Resolving;
+
+        let match_idx   = self.chord.match_idx;
+        let match_layer = self.chord.match_layer as usize;
+        let last_time   = self.chord.last_code_time;
+        let queue_sz    = self.chord.queue_sz;
+
+        let mut queue_offset = 0usize;
+
+        if let Some(ci) = match_idx {
+            let chord = self.config.layers[match_layer].chords[ci]; // Copy
+            let mut chord_code = 0u8;
+            for i in 0..self.active_chords.len() {
+                if self.active_chords[i].active == 0 {
+                    self.active_chords[i] = ActiveChord { active: 1, chord, layer: match_layer as i32 };
+                    chord_code = KEYD_CHORD_1 + i as u8;
+                    break;
+                }
+            }
+            if chord_code != 0 {
+                queue_offset = chord.sz;
+                self.process_event(output, chord_code, 1, last_time);
+            }
+        }
+
+        // Snapshot events to flush before mutating chord state.
+        let flush_sz = queue_sz.saturating_sub(queue_offset);
+        let flush: Vec<KeyEvent> = self.chord.queue[queue_offset..queue_offset + flush_sz].to_vec();
+
+        self.chord.queue_sz = 0;
+        self.chord.match_idx = None;
+
+        // Flush with state still Resolving so nested handle_chord returns immediately.
+        if flush_sz > 0 {
+            self.kbd_process_events(output, &flush);
+        }
+
+        self.chord.state = ChordStatus::Inactive;
+        true
+    }
+
+    fn abort_chord<O: Output>(&mut self, output: &mut O) -> bool {
+        self.chord.match_idx = None;
+        self.resolve_chord(output)
+    }
+
+    fn handle_chord<O: Output>(&mut self, output: &mut O, code: u8, pressed: u8, time: i64) -> bool {
+        let interkey_timeout = self.config.chord_interkey_timeout;
+        let hold_timeout     = self.config.chord_hold_timeout;
+
+        // Release of a key belonging to an already-resolved active chord.
+        if code != 0 && pressed == 0 {
+            for i in 0..self.active_chords.len() {
+                if self.active_chords[i].active == 0 { continue; }
+                let chord_code = KEYD_CHORD_1 + i as u8;
+                let mut found = false;
+                let mut nremaining = 0usize;
+                for j in 0..self.active_chords[i].chord.sz {
+                    if self.active_chords[i].chord.keys[j] == code {
+                        self.active_chords[i].chord.keys[j] = 0;
+                        found = true;
+                    }
+                    if self.active_chords[i].chord.keys[j] != 0 { nremaining += 1; }
+                }
+                if found {
+                    if nremaining == 0 {
+                        self.active_chords[i].active = 0;
+                        self.process_event(output, chord_code, 0, time);
+                    }
+                    return true;
+                }
+            }
+        }
+
+        let state = self.chord.state;
+        match state {
+            ChordStatus::Resolving => false,
+
+            ChordStatus::Inactive => {
+                self.chord.queue_sz = 0;
+                self.chord.match_idx = None;
+                self.chord.start_code = code;
+                if code == 0 { return false; }
+                self.enqueue_chord_event(code, pressed, time);
+                let (ret, mi, ml) = self.check_chord_match();
+                match ret {
+                    0 => false,
+                    1 | 3 => {
+                        self.chord.match_idx = mi;
+                        self.chord.match_layer = ml;
+                        self.chord.state = ChordStatus::PendingDisambiguation;
+                        self.chord.last_code_time = time;
+                        self.schedule_timeout(time + interkey_timeout);
+                        true
+                    }
+                    _ => {
+                        self.chord.match_idx = mi;
+                        self.chord.match_layer = ml;
+                        self.chord.last_code_time = time;
+                        if hold_timeout > 0 {
+                            self.chord.state = ChordStatus::PendingHoldTimeout;
+                            self.schedule_timeout(time + hold_timeout);
+                            true
+                        } else {
+                            self.resolve_chord(output)
+                        }
+                    }
+                }
+            }
+
+            ChordStatus::PendingDisambiguation => {
+                if code == 0 {
+                    if (time - self.chord.last_code_time) >= interkey_timeout {
+                        if self.chord.match_idx.is_some() {
+                            let timeleft = hold_timeout - interkey_timeout;
+                            if timeleft > 0 {
+                                self.schedule_timeout(time + timeleft);
+                                self.chord.state = ChordStatus::PendingHoldTimeout;
+                            } else {
+                                return self.resolve_chord(output);
+                            }
+                        } else {
+                            return self.abort_chord(output);
+                        }
+                        return true;
+                    }
+                    return false;
+                }
+                self.enqueue_chord_event(code, pressed, time);
+                if pressed == 0 { return self.abort_chord(output); }
+                let (ret, mi, ml) = self.check_chord_match();
+                match ret {
+                    0 => self.abort_chord(output),
+                    1 | 3 => {
+                        self.chord.match_idx = mi;
+                        self.chord.match_layer = ml;
+                        self.chord.last_code_time = time;
+                        self.chord.state = ChordStatus::PendingDisambiguation;
+                        self.schedule_timeout(time + interkey_timeout);
+                        true
+                    }
+                    _ => {
+                        self.chord.match_idx = mi;
+                        self.chord.match_layer = ml;
+                        self.chord.last_code_time = time;
+                        if hold_timeout > 0 {
+                            self.chord.state = ChordStatus::PendingHoldTimeout;
+                            self.schedule_timeout(time + hold_timeout);
+                            true
+                        } else {
+                            self.resolve_chord(output)
+                        }
+                    }
+                }
+            }
+
+            ChordStatus::PendingHoldTimeout => {
+                if code == 0 {
+                    if (time - self.chord.last_code_time) >= hold_timeout {
+                        return self.resolve_chord(output);
+                    }
+                    return false;
+                }
+                self.enqueue_chord_event(code, pressed, time);
+                if pressed == 0 {
+                    let is_chord_key = if let Some(ci) = self.chord.match_idx {
+                        let li = self.chord.match_layer as usize;
+                        let chord = &self.config.layers[li].chords[ci];
+                        chord.keys[..chord.sz].contains(&code)
+                    } else { false };
+                    if is_chord_key { return self.abort_chord(output); }
+                }
+                true
+            }
+        }
+    }
+
     fn resolve_descriptor(&self, code: u8) -> (Descriptor, i32) {
+        // Virtual chord-key codes: look up the active chord slot.
+        if code >= KEYD_CHORD_1 {
+            let slot = (code - KEYD_CHORD_1) as usize;
+            if slot < self.active_chords.len() && self.active_chords[slot].active != 0 {
+                return (self.active_chords[slot].chord.d, self.active_chords[slot].layer);
+            }
+        }
+
         // Walk active layers in activation order (most recently activated first)
         let mut active_layers: Vec<usize> = (0..self.config.layers.len())
             .filter(|&i| self.layer_state[i].active != 0)
@@ -338,10 +726,34 @@ impl Keyboard {
     }
 
     fn process_event<O: Output>(&mut self, output: &mut O, code: u8, pressed: u8, time: i64) -> i64 {
-        // Phases 7/8 will insert handle_pending_timeout / handle_chord here.
+        if self.handle_chord(output, code, pressed, time) {
+            return self.calculate_main_loop_timeout(time);
+        }
+
+        self.handle_pending_timeout(output, code, pressed, time);
 
         if self.handle_pending_overload(output, code, pressed, time) {
             return self.calculate_main_loop_timeout(time);
+        }
+
+        if self.oneshot_timeout != 0 && time >= self.oneshot_timeout {
+            self.clear_oneshot(output);
+            self.update_mods(output, -1, 0);
+        }
+
+        if self.macro_play.active_idx.is_some() {
+            if code != 0 {
+                self.macro_play.active_idx = None;
+                self.update_mods(output, -1, 0);
+            } else if time >= self.macro_play.timeout {
+                let macro_idx = self.macro_play.active_idx.unwrap();
+                let macro_layer = self.macro_play.layer;
+                let exec_time = self.execute_macro(output, macro_layer, macro_idx);
+                let interval = self.macro_play.repeat_interval;
+                let deadline = exec_time + time + interval;
+                self.macro_play.timeout = deadline;
+                self.schedule_timeout(deadline);
+            }
         }
 
         if code != 0 {
@@ -387,7 +799,7 @@ impl Keyboard {
                         }
                         self.last_repeatable_action = ra;
                         self.send_key(output, new_code, 1);
-                        self.clear_oneshot();
+                        self.clear_oneshot(output);
                     } else {
                         self.send_key(output, new_code, 0);
                         self.update_mods(output, -1, 0);
@@ -401,7 +813,7 @@ impl Keyboard {
                         self.update_mods(output, layer, 0);
                         self.last_repeatable_action = d;
                         self.send_key(output, code, 1);
-                        self.clear_oneshot();
+                        self.clear_oneshot(output);
                         self.last_simple_key_time = time;
                     } else {
                         self.send_key(output, code, 0);
@@ -417,6 +829,12 @@ impl Keyboard {
                     _ => return,
                 };
                 if pressed != 0 {
+                    // LayerM: execute macro before activating the layer.
+                    if d.op == Op::LayerM {
+                        if let DescriptorData::LayerMacro(lm) = d.data {
+                            self.execute_macro(output, layer, lm.macro_idx as usize);
+                        }
+                    }
                     self.activate_layer(output, code, idx, time);
                 } else {
                     self.deactivate_layer(output, idx);
@@ -454,8 +872,12 @@ impl Keyboard {
                         self.deactivate_layer(output, idx);
                     }
                     self.update_mods(output, -1, 0);
-                    self.clear_oneshot();
-                    // ToggleM: macro execution in Phase 9
+                    self.clear_oneshot(output);
+                    if d.op == Op::ToggleM {
+                        if let DescriptorData::LayerMacro(lm) = d.data {
+                            self.execute_macro(output, layer, lm.macro_idx as usize);
+                        }
+                    }
                 }
             }
 
@@ -506,9 +928,22 @@ impl Keyboard {
                             self.update_mods(output, -1, 0);
                         }
                     }
-                    // SwapM: macro execution in Phase 9
+                    if d.op == Op::SwapM {
+                        if let DescriptorData::LayerMacro(lm) = d.data {
+                            self.execute_macro(output, layer, lm.macro_idx as usize);
+                        }
+                    }
+                } else if d.op == Op::SwapM {
+                    // On release: if macro is a single keysequence, send the key-up.
+                    if let DescriptorData::LayerMacro(lm) = d.data {
+                        let mac = self.config.macros[lm.macro_idx as usize];
+                        if mac.sz == 1 && mac.entries[0].entry_type == crate::macro_types::MacroEntryType::KeySequence {
+                            let c = (mac.entries[0].data & 0xFF) as u8;
+                            self.send_key(output, c, 0);
+                            self.update_mods(output, -1, 0);
+                        }
+                    }
                 }
-                // SwapM release: key release in Phase 9
             }
 
             Op::Clear => {
@@ -520,7 +955,9 @@ impl Keyboard {
             Op::ClearM => {
                 if pressed != 0 {
                     self.clear(output);
-                    // Macro execution in Phase 9
+                    if let DescriptorData::MacroOp(m) = d.data {
+                        self.execute_macro(output, layer, m.macro_idx as usize);
+                    }
                 }
             }
 
@@ -609,18 +1046,173 @@ impl Keyboard {
                 }
             }
 
-            _ => {
-                log::warn!(
-                    "Unimplemented op {:?} for key {}, passthrough",
-                    d.op,
-                    KEYCODE_TABLE[code as usize].name.unwrap_or("UNKNOWN")
-                );
-                if pressed != 0 {
-                    self.send_key(output, code, 1);
-                } else {
-                    self.send_key(output, code, 0);
+            Op::Timeout => {
+                if let DescriptorData::TimeoutOp(to) = d.data {
+                    if pressed != 0 {
+                        let action1     = self.config.descriptors[to.action1_idx as usize];
+                        let action2     = self.config.descriptors[to.action2_idx as usize];
+                        let expiration  = time + to.timeout as i64;
+                        self.pending_timeout = Some(TimeoutState {
+                            code,
+                            dl: layer as u8,
+                            spontaneous: 0,
+                            expiration,
+                            activation_time: time,
+                            action1,
+                            action2,
+                        });
+                        self.schedule_timeout(expiration);
+                    } else if let Some(ref mut pt) = self.pending_timeout {
+                        // Release at the same tick as press → defer resolution.
+                        if pt.code == code && time == pt.activation_time {
+                            pt.spontaneous = 1;
+                        }
+                    }
                 }
             }
+
+            Op::Oneshot | Op::OneshotM | Op::OneshotK => {
+                // Extract the layer index and, for OneshotK, the nested key descriptor index.
+                let (idx, nested_idx) = match d.data {
+                    DescriptorData::Layer(l)       => (l.idx as usize, None),
+                    DescriptorData::LayerMacro(lm) => (lm.idx as usize, None), // macro: Phase 9
+                    DescriptorData::Overload(ov)   => (ov.layer_idx as usize, Some(ov.action_idx as usize)),
+                    _ => return,
+                };
+
+                if pressed != 0 {
+                    // OneshotM: execute macro before activating the layer.
+                    if d.op == Op::OneshotM {
+                        if let DescriptorData::LayerMacro(lm) = d.data {
+                            self.execute_macro(output, layer, lm.macro_idx as usize);
+                        }
+                    }
+                    // OneshotK: also fire the nested key descriptor on press.
+                    if let Some(ai) = nested_idx {
+                        let nested = self.config.descriptors[ai];
+                        self.execute_descriptor(output, nested, code, layer, 1, time);
+                    }
+                    self.activate_layer(output, code, idx, time);
+                    self.update_mods(output, layer, 0);
+                    self.oneshot_latch = 1;
+                } else {
+                    // OneshotK: also fire the nested key descriptor on release.
+                    if let Some(ai) = nested_idx {
+                        let nested = self.config.descriptors[ai];
+                        self.execute_descriptor(output, nested, code, layer, 0, time);
+                    }
+
+                    if self.oneshot_latch != 0 {
+                        // Tapped (released before any other key pressed) → schedule oneshot.
+                        self.layer_state[idx].oneshot_depth += 1;
+                        let ot = self.config.oneshot_timeout;
+                        if ot != 0 {
+                            let deadline = time + ot;
+                            self.oneshot_timeout = deadline;
+                            self.schedule_timeout(deadline);
+                        }
+                    } else {
+                        // Another key was pressed while held → deactivate immediately.
+                        self.deactivate_layer(output, idx);
+                        self.update_mods(output, -1, 0);
+                    }
+                }
+            }
+
+            Op::OneshotMulti => {
+                if let DescriptorData::LayerMulti(lm) = d.data {
+                    if pressed != 0 {
+                        for &i in lm.idx.iter().filter(|&&i| i != -1) {
+                            self.activate_layer(output, code, i as usize, time);
+                        }
+                        self.update_mods(output, layer, 0);
+                        self.oneshot_latch = 1;
+                    } else {
+                        if self.oneshot_latch != 0 {
+                            for &i in lm.idx.iter().filter(|&&i| i != -1) {
+                                self.layer_state[i as usize].oneshot_depth += 1;
+                            }
+                            let ot = self.config.oneshot_timeout;
+                            if ot != 0 {
+                                let deadline = time + ot;
+                                self.oneshot_timeout = deadline;
+                                self.schedule_timeout(deadline);
+                            }
+                        } else {
+                            for &i in lm.idx.iter().filter(|&&i| i != -1) {
+                                self.deactivate_layer(output, i as usize);
+                            }
+                            self.update_mods(output, -1, 0);
+                        }
+                    }
+                }
+            }
+
+            Op::Macro | Op::Macro2 => {
+                if pressed != 0 {
+                    let (macro_idx, first_delay, repeat_interval) = match d.data {
+                        DescriptorData::MacroOp(m) => (
+                            m.macro_idx as usize,
+                            self.config.macro_timeout,
+                            self.config.macro_repeat_timeout,
+                        ),
+                        DescriptorData::Macro2(m) => (
+                            m.macro_idx as usize,
+                            m.delay as i64,
+                            m.interval as i64,
+                        ),
+                        _ => return,
+                    };
+                    self.clear_oneshot(output);
+                    let exec_time = self.execute_macro(output, layer, macro_idx);
+                    self.macro_play.active_idx = Some(macro_idx);
+                    self.macro_play.layer = layer;
+                    let deadline = exec_time + time + first_delay;
+                    self.macro_play.timeout = deadline;
+                    self.macro_play.repeat_interval = repeat_interval;
+                    self.schedule_timeout(deadline);
+                    self.last_repeatable_action = d;
+                }
+            }
+
+            Op::Command => {
+                if pressed != 0 {
+                    if let DescriptorData::Command(cmd_d) = d.data {
+                        let cmd = self.config.commands[cmd_d.cmd_idx as usize].cmd.clone();
+                        let _ = std::process::Command::new("/bin/sh")
+                            .args(["-c", &cmd])
+                            .stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .spawn();
+                        self.clear_oneshot(output);
+                        self.update_mods(output, -1, 0);
+                    }
+                }
+            }
+
+            Op::Scroll => {
+                if let DescriptorData::Scroll(s) = d.data {
+                    self.scroll.sensitivity = s.sensitivity as i32;
+                    self.scroll.active = if pressed != 0 { 1 } else { 0 };
+                }
+            }
+            Op::ScrollToggleOn => {
+                if let DescriptorData::Scroll(s) = d.data {
+                    self.scroll.sensitivity = s.sensitivity as i32;
+                    self.scroll.active = 1;
+                }
+            }
+            Op::ScrollToggleOff => {
+                if pressed != 0 { self.scroll.active = 0; }
+            }
+            Op::ScrollToggle => {
+                if let DescriptorData::Scroll(s) = d.data {
+                    self.scroll.sensitivity = s.sensitivity as i32;
+                    if pressed != 0 { self.scroll.active ^= 1; }
+                }
+            }
+
         }
 
         // Track the last physically pressed key (used by inhibit_modifier_guard, overload tap, etc.)

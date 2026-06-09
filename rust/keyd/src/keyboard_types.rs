@@ -74,6 +74,7 @@ pub struct LayerState {
     pub oneshot_depth: u8,
 }
 
+#[derive(Clone, Copy)]
 pub struct ActiveChord {
     pub active: u8,
     pub chord: Chord,
