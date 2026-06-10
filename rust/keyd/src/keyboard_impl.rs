@@ -11,7 +11,15 @@ impl Keyboard {
             last_pressed_code: 0,
             oneshot_latch: 0,
             inhibit_modifier_guard: 0,
-            macro_play: MacroPlayState { active_idx: None, layer: -1, timeout: 0, repeat_interval: 0 },
+            macro_play: MacroPlayState {
+                active_idx: None,
+                entry_idx: 0,
+                hold_start_idx: None,
+                is_repeating: false,
+                layer: -1,
+                timeout: 0,
+                repeat_interval: 0,
+            },
             overload_last_layer_code: -1,
             oneshot_timeout: 0,
             overload_start_time: 0,
@@ -357,8 +365,117 @@ impl Keyboard {
 
     // ── Macro execution ───────────────────────────────────────────────────────
 
-    /// Low-level macro runner: sends keys via `output`, returns total elapsed ms.
-    pub fn macro_execute<O: Output>(output: &mut O, mac: &crate::macro_types::Macro, seq_timeout_us: u64) -> i64 {
+    fn play_macro_init_async<O: Output>(&mut self, output: &mut O, layer: i32, macro_idx: usize, time: i64) {
+        let mac = self.config.macros[macro_idx];
+        if mac.sz == 1 && mac.entries[0].entry_type == crate::macro_types::MacroEntryType::KeySequence {
+            let entry = mac.entries[0];
+            let code = (entry.data & 0xFF) as u8;
+            let mods = (entry.data >> 8) as u8;
+            self.update_mods(output, layer, mods);
+            self.send_key(output, code, 1);
+            self.send_key(output, code, 0);
+            self.update_mods(output, -1, 0);
+        } else {
+            self.update_mods(output, -1, 0);
+            self.macro_play.active_idx = Some(macro_idx);
+            self.macro_play.layer = layer;
+            self.macro_play.entry_idx = 0;
+            self.macro_play.hold_start_idx = None;
+            self.macro_play.is_repeating = false;
+            self.macro_play.repeat_interval = 0;
+            self.macro_play.timeout = time;
+            self.play_macro_step(output, time);
+        }
+    }
+
+    fn play_macro_step<O: Output>(&mut self, output: &mut O, time: i64) {
+        use crate::macro_types::MacroEntryType;
+
+        let macro_idx = match self.macro_play.active_idx {
+            Some(idx) => idx,
+            None => return,
+        };
+
+        let mac = self.config.macros[macro_idx];
+        let seq_timeout_ms = self.config.macro_sequence_timeout;
+
+        while self.macro_play.entry_idx < mac.sz as usize {
+            let ent = mac.entries[self.macro_play.entry_idx];
+            self.macro_play.entry_idx += 1;
+
+            match ent.entry_type {
+                MacroEntryType::Hold => {
+                    if self.macro_play.hold_start_idx.is_none() {
+                        self.macro_play.hold_start_idx = Some(self.macro_play.entry_idx - 1);
+                    }
+                    output.send_key(ent.data as u8, 1);
+                }
+                MacroEntryType::Release => {
+                    if let Some(start) = self.macro_play.hold_start_idx.take() {
+                        for j in start..self.macro_play.entry_idx - 1 {
+                            output.send_key(mac.entries[j].data as u8, 0);
+                        }
+                    }
+                }
+                MacroEntryType::Unicode => {
+                    let codes = crate::unicode::unicode_get_sequence(ent.data as usize);
+                    for &c in &codes {
+                        if c != 0 {
+                            output.send_key(c, 1);
+                            output.send_key(c, 0);
+                        }
+                    }
+                }
+                MacroEntryType::KeySequence => {
+                    let code = (ent.data & 0xFF) as u8;
+                    let mods = (ent.data >> 8) as u8;
+                    for md in &MODIFIERS {
+                        if mods & md.mask != 0 {
+                            output.send_key(md.key, 1);
+                        }
+                    }
+                    output.send_key(code, 1);
+                    output.send_key(code, 0);
+                    for md in &MODIFIERS {
+                        if mods & md.mask != 0 {
+                            output.send_key(md.key, 0);
+                        }
+                    }
+                }
+                MacroEntryType::Timeout => {
+                    let ms = ent.data as i64;
+                    if ms > 0 {
+                        let deadline = time + ms;
+                        self.macro_play.timeout = deadline;
+                        self.schedule_timeout(deadline);
+                        return;
+                    }
+                }
+            }
+
+            if seq_timeout_ms > 0 && self.macro_play.entry_idx < mac.sz as usize {
+                let deadline = time + seq_timeout_ms;
+                self.macro_play.timeout = deadline;
+                self.schedule_timeout(deadline);
+                return;
+            }
+        }
+
+        // Macro finished one full run.
+        if self.macro_play.repeat_interval > 0 {
+            self.macro_play.is_repeating = true;
+            self.macro_play.entry_idx = 0;
+            let deadline = time + self.macro_play.repeat_interval;
+            self.macro_play.timeout = deadline;
+            self.schedule_timeout(deadline);
+        } else {
+            self.macro_play.active_idx = None;
+            self.update_mods(output, -1, 0);
+        }
+    }
+
+    /// Public entry point for IPC/macro command execution (blocks, but used outside daemon loop).
+    pub fn macro_execute_blocking<O: Output>(output: &mut O, mac: &crate::macro_types::Macro, seq_timeout_us: u64) -> i64 {
         use crate::macro_types::MacroEntryType;
         let mut hold_start: Option<usize> = None;
         let mut elapsed_ms: i64 = 0;
@@ -407,29 +524,6 @@ impl Keyboard {
         }
 
         elapsed_ms
-    }
-
-    /// High-level macro executor: handles single-entry shortcut and modifier bookkeeping.
-    fn execute_macro<O: Output>(&mut self, output: &mut O, layer: i32, macro_idx: usize) -> i64 {
-        use crate::macro_types::MacroEntryType;
-        let mac = self.config.macros[macro_idx]; // Copy (Macro: Copy)
-        let seq_us = self.config.macro_sequence_timeout as u64 * 1000;
-
-        if mac.sz == 1 && mac.entries[0].entry_type == MacroEntryType::KeySequence {
-            let entry = mac.entries[0];
-            let code = (entry.data & 0xFF) as u8;
-            let mods = (entry.data >> 8) as u8;
-            self.update_mods(output, layer, mods);
-            self.send_key(output, code, 1);
-            self.send_key(output, code, 0);
-            self.update_mods(output, -1, 0);
-            return 0;
-        }
-
-        self.update_mods(output, -1, 0);
-        let elapsed = Self::macro_execute(output, &mac, seq_us);
-        self.update_mods(output, -1, 0);
-        elapsed
     }
 
     // ── Chord helpers ─────────────────────────────────────────────────────────
@@ -698,25 +792,25 @@ impl Keyboard {
 
     pub fn kbd_process_events<O: Output>(&mut self, output: &mut O, events: &[KeyEvent]) -> i64 {
         let mut i = 0;
-        let mut pending_timeout: i64 = 0;
-        let mut timeout_ts: i64 = 0;
+        let mut time: i64 = events.first().map(|e| e.timestamp as i64).unwrap_or(0);
 
         while i < events.len() {
             let ev = &events[i];
             let ev_ts = ev.timestamp as i64;
 
-            // If a timeout deadline has passed before this event, fire it first.
-            if pending_timeout > 0 && timeout_ts <= ev_ts {
-                pending_timeout = self.process_event(output, 0, 0, timeout_ts);
-                timeout_ts += pending_timeout;
+            let timeout = self.calculate_main_loop_timeout(time);
+
+            if timeout > 0 && time + timeout <= ev_ts {
+                time += timeout;
+                self.process_event(output, 0, 0, time);
             } else {
-                pending_timeout = self.process_event(output, ev.code, ev.pressed, ev_ts);
-                timeout_ts = ev_ts + pending_timeout;
+                time = ev_ts;
+                self.process_event(output, ev.code, ev.pressed, time);
                 i += 1;
             }
         }
 
-        pending_timeout
+        self.calculate_main_loop_timeout(time)
     }
 
     fn process_event<O: Output>(&mut self, output: &mut O, code: u8, pressed: u8, time: i64) -> i64 {
@@ -740,13 +834,7 @@ impl Keyboard {
                 self.macro_play.active_idx = None;
                 self.update_mods(output, -1, 0);
             } else if time >= self.macro_play.timeout {
-                let macro_idx = self.macro_play.active_idx.unwrap();
-                let macro_layer = self.macro_play.layer;
-                let exec_time = self.execute_macro(output, macro_layer, macro_idx);
-                let interval = self.macro_play.repeat_interval;
-                let deadline = exec_time + time + interval;
-                self.macro_play.timeout = deadline;
-                self.schedule_timeout(deadline);
+                self.play_macro_step(output, time);
             }
         }
 
@@ -825,7 +913,7 @@ impl Keyboard {
                 if pressed != 0 {
                     // LayerM: execute macro before activating the layer.
                     if d.op == Op::LayerM && let DescriptorData::LayerMacro(lm) = d.data {
-                        self.execute_macro(output, layer, lm.macro_idx as usize);
+                        self.play_macro_init_async(output, layer, lm.macro_idx as usize, time);
                     }
                     self.activate_layer(output, code, idx, time);
                 } else {
@@ -864,7 +952,7 @@ impl Keyboard {
                     self.update_mods(output, -1, 0);
                     self.clear_oneshot(output);
                     if d.op == Op::ToggleM && let DescriptorData::LayerMacro(lm) = d.data {
-                        self.execute_macro(output, layer, lm.macro_idx as usize);
+                        self.play_macro_init_async(output, layer, lm.macro_idx as usize, time);
                     }
                 }
             }
@@ -916,7 +1004,7 @@ impl Keyboard {
                         }
                     }
                     if d.op == Op::SwapM && let DescriptorData::LayerMacro(lm) = d.data {
-                        self.execute_macro(output, layer, lm.macro_idx as usize);
+                        self.play_macro_init_async(output, layer, lm.macro_idx as usize, time);
                     }
                 } else if d.op == Op::SwapM {
                     // On release: if macro is a single keysequence, send the key-up.
@@ -941,7 +1029,7 @@ impl Keyboard {
                 if pressed != 0 {
                     self.clear(output);
                     if let DescriptorData::MacroOp(m) = d.data {
-                        self.execute_macro(output, layer, m.macro_idx as usize);
+                        self.play_macro_init_async(output, layer, m.macro_idx as usize, time);
                     }
                 }
             }
@@ -1063,7 +1151,7 @@ impl Keyboard {
                 if pressed != 0 {
                     // OneshotM: execute macro before activating the layer.
                     if d.op == Op::OneshotM && let DescriptorData::LayerMacro(lm) = d.data {
-                        self.execute_macro(output, layer, lm.macro_idx as usize);
+                        self.play_macro_init_async(output, layer, lm.macro_idx as usize, time);
                     }
                     // OneshotK: also fire the nested key descriptor on press.
                     if let Some(ai) = nested_idx {
@@ -1128,27 +1216,23 @@ impl Keyboard {
 
             Op::Macro | Op::Macro2 => {
                 if pressed != 0 {
-                    let (macro_idx, first_delay, repeat_interval) = match d.data {
+                    let (macro_idx, repeat_interval) = match d.data {
                         DescriptorData::MacroOp(m) => (
                             m.macro_idx as usize,
-                            self.config.macro_timeout,
                             self.config.macro_repeat_timeout,
                         ),
                         DescriptorData::Macro2(m) => (
                             m.macro_idx as usize,
-                            m.delay as i64,
                             m.interval as i64,
                         ),
                         _ => return,
                     };
                     self.clear_oneshot(output);
-                    let exec_time = self.execute_macro(output, layer, macro_idx);
-                    self.macro_play.active_idx = Some(macro_idx);
-                    self.macro_play.layer = layer;
-                    let deadline = exec_time + time + first_delay;
-                    self.macro_play.timeout = deadline;
-                    self.macro_play.repeat_interval = repeat_interval;
-                    self.schedule_timeout(deadline);
+                    self.play_macro_init_async(output, layer, macro_idx, time);
+                    // play_macro_init_async might have set repeat_interval to 0, so we update it if needed.
+                    if self.macro_play.active_idx == Some(macro_idx) {
+                        self.macro_play.repeat_interval = repeat_interval;
+                    }
                     self.last_repeatable_action = d;
                 }
             }

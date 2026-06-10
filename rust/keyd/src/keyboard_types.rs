@@ -61,6 +61,9 @@ pub struct OverloadState {
 
 pub struct MacroPlayState {
     pub active_idx: Option<usize>,
+    pub entry_idx: usize,
+    pub hold_start_idx: Option<usize>,
+    pub is_repeating: bool,
     pub layer: i32,
     pub timeout: i64,
     pub repeat_interval: i64,

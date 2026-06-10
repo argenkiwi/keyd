@@ -279,7 +279,7 @@ impl Daemon {
                 match crate::config_parse::config_parse_macro_expression(&src) {
                     Ok(mac) => {
                         let mut out = VkbdOutput { vkbd: &self.output.vkbd };
-                        Keyboard::macro_execute(&mut out, &mac, seq_us);
+                        Keyboard::macro_execute_blocking(&mut out, &mac, seq_us);
                         self.send_success(&mut conn);
                     }
                     Err(e) => self.send_fail(&mut conn, &e),

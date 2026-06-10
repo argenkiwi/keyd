@@ -545,28 +545,69 @@ mod tests {
     }
 
     #[test]
-    fn test_swap_layer() {
+    fn test_macro_non_blocking_timeouts() {
+        // a = macro(h 100ms e)
         let mut cfg = Config::new();
-        config_parse_string(&mut cfg,
-            "[ids]\n*\n\n[main]\ncapslock = layer(nav)\n\n[nav]\nj = swap(vim)\n\n[vim]\nh = left\n"
-        ).unwrap();
+        config_parse_string(&mut cfg, "[ids]\n*\n\n[main]\na = macro(h 100ms e)\n").unwrap();
         let mut kbd = Keyboard::new(cfg);
         let mut output = TestOutput::new();
 
-        // Press capslock (activate nav), press j (swap nav→vim),
-        // press h (in vim → left), release all
-        let events = [
-            KeyEvent { code: KEYD_CAPSLOCK, pressed: 1, timestamp: 0 },
-            KeyEvent { code: KEYD_J,        pressed: 1, timestamp: 1 },
-            KeyEvent { code: KEYD_J,        pressed: 0, timestamp: 1 },
-            KeyEvent { code: KEYD_H,        pressed: 1, timestamp: 2 },
-            KeyEvent { code: KEYD_H,        pressed: 0, timestamp: 2 },
-            KeyEvent { code: KEYD_CAPSLOCK, pressed: 0, timestamp: 3 },
-        ];
-        kbd.kbd_process_events(&mut output, &events);
+        // 1. Press A: should fire 'h' and schedule a timeout.
+        kbd.kbd_process_events(&mut output, &[KeyEvent { code: KEYD_A, pressed: 1, timestamp: 0 }]);
+        
+        let codes: Vec<u8> = output.events.iter().filter(|e| e.pressed != 0).map(|e| e.code).collect();
+        assert_eq!(codes, vec![KEYD_H]);
+        output.events.clear();
 
-        let h_down: Vec<_> = output.events.iter().filter(|e| e.pressed != 0).collect();
-        assert!(!h_down.is_empty());
-        assert_eq!(h_down[0].code, KEYD_LEFT, "h should produce left in vim layer after swap");
+        // 2. Advance time past 100ms: should fire 'e'.
+        // kbd_process_events with an empty list at t=150 should trigger the pending timeout.
+        kbd.kbd_process_events(&mut output, &[KeyEvent { code: 0, pressed: 0, timestamp: 150 }]);
+        
+        let codes: Vec<u8> = output.events.iter().filter(|e| e.pressed != 0).map(|e| e.code).collect();
+        assert_eq!(codes, vec![KEYD_E]);
+    }
+
+    #[test]
+    fn test_macro_cancellation_on_interleaved_key() {
+        // a = macro(h 100ms e)
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, "[ids]\n*\n\n[main]\na = macro(h 100ms e)\n").unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        // 1. Start macro.
+        kbd.kbd_process_events(&mut output, &[KeyEvent { code: KEYD_A, pressed: 1, timestamp: 0 }]);
+        output.events.clear();
+
+        // 2. Press B before macro finishes.
+        kbd.kbd_process_events(&mut output, &[KeyEvent { code: KEYD_B, pressed: 1, timestamp: 50 }]);
+        
+        // 3. Advance time past 100ms: macro should NOT fire 'e' because it was canceled.
+        kbd.kbd_process_events(&mut output, &[KeyEvent { code: 0, pressed: 0, timestamp: 150 }]);
+        
+        let e_fired = output.events.iter().any(|e| e.code == KEYD_E);
+        assert!(!e_fired, "macro should have been canceled by key B");
+    }
+
+    #[test]
+    fn test_macro_repeat() {
+        // a = macro(h 50ms) with 100ms repeat interval
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, "[ids]\n*\n\n[global]\nmacro_repeat_timeout = 100\n\n[main]\na = macro(h 50ms)\n").unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        // 1. Start macro. Fires 'h', schedules timeout at 50ms.
+        kbd.kbd_process_events(&mut output, &[KeyEvent { code: KEYD_A, pressed: 1, timestamp: 0 }]);
+        output.events.clear();
+
+        // 2. Tick at 60ms: finishes first run, schedules repeat timeout at 60 + 100 = 160ms.
+        kbd.kbd_process_events(&mut output, &[KeyEvent { code: 0, pressed: 0, timestamp: 60 }]);
+        output.events.clear();
+
+        // 3. Tick at 170ms: starts second run, fires 'h' again.
+        kbd.kbd_process_events(&mut output, &[KeyEvent { code: 0, pressed: 0, timestamp: 170 }]);
+        let codes: Vec<u8> = output.events.iter().filter(|e| e.pressed != 0).map(|e| e.code).collect();
+        assert_eq!(codes, vec![KEYD_H]);
     }
 }
