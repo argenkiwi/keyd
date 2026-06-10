@@ -89,8 +89,7 @@ fn input_text(vkbd: &Vkbd, text: &str, delay_us: u32) {
         let s = c.to_string();
         let mut found = false;
 
-        for i in 0..256usize {
-            let ent = &KEYCODE_TABLE[i];
+        for (i, ent) in KEYCODE_TABLE.iter().enumerate() {
             if ent.name.map(|n| n == s).unwrap_or(false) {
                 vkbd.send_key(i as u8, 1);
                 vkbd.send_key(i as u8, 0);
@@ -116,12 +115,10 @@ fn input_text(vkbd: &Vkbd, text: &str, delay_us: u32) {
             }
         }
 
-        if !found {
-            if let Some(idx) = crate::unicode::unicode_lookup_index(c as u32) {
-                let codes = crate::unicode::unicode_get_sequence(idx);
-                for &code in &codes {
-                    if code != 0 { vkbd.send_key(code, 1); vkbd.send_key(code, 0); }
-                }
+        if let Some(idx) = (!found).then(|| crate::unicode::unicode_lookup_index(c as u32)).flatten() {
+            let codes = crate::unicode::unicode_get_sequence(idx);
+            for &code in &codes {
+                if code != 0 { vkbd.send_key(code, 1); vkbd.send_key(code, 0); }
             }
         }
 
@@ -220,12 +217,11 @@ impl Daemon {
         if let Ok(entries) = std::fs::read_dir(&self.config_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map(|e| e == "conf").unwrap_or(false) {
-                    if let Some(p) = path.to_str() {
-                        match config_parse(p) {
-                            Ok(cfg) => self.keyboards.push(Keyboard::new(cfg)),
-                            Err(e)  => eprintln!("WARNING: {}: {}", p, e),
-                        }
+                let is_conf = path.extension().map(|e| e == "conf").unwrap_or(false);
+                if let Some(p) = path.to_str().filter(|_| is_conf) {
+                    match config_parse(p) {
+                        Ok(cfg) => self.keyboards.push(Keyboard::new(cfg)),
+                        Err(e)  => eprintln!("WARNING: {}: {}", p, e),
                     }
                 }
             }
@@ -302,7 +298,6 @@ impl Daemon {
                 // Transfer ownership; drop will NOT close (fd is in listeners).
                 self.output.listeners.push(conn.into_raw_fd());
                 // Don't send a response — the connection stays open for streaming.
-                return;
             }
 
             _ => self.send_fail(&mut conn, "unknown command"),
@@ -408,14 +403,10 @@ impl Daemon {
             }
 
             // ── Device events ─────────────────────────────────────────────
-            for i in 0..dev_count {
-                if pfds[i].revents == 0 { continue; }
+            for (i, pfd) in pfds.iter().enumerate().take(dev_count) {
+                if pfd.revents == 0 { continue; }
                 let kbd_idx = self.device_kbd[i];
-                loop {
-                    let devev = match self.devices[i].read_event() {
-                        Some(e) => e,
-                        None    => break,
-                    };
+                while let Some(devev) = self.devices[i].read_event() {
                     match devev.event_type {
                         DeviceEventType::Removed => {
                             eprintln!("DEVICE: removed {}", self.devices[i].path);
@@ -446,14 +437,12 @@ impl Daemon {
             }
 
             // ── IPC connections ───────────────────────────────────────────
-            if let Some(idx) = ipc_pfd_idx {
-                if pfds[idx].revents & libc::POLLIN != 0 {
-                    let conn_opt = self.ipc_server.as_ref()
-                        .and_then(|(l, _)| l.accept().ok())
-                        .map(|(c, _)| c);
-                    if let Some(conn) = conn_opt {
-                        self.handle_client(conn);
-                    }
+            if ipc_pfd_idx.filter(|&idx| pfds[idx].revents & libc::POLLIN != 0).is_some() {
+                let conn_opt = self.ipc_server.as_ref()
+                    .and_then(|(l, _)| l.accept().ok())
+                    .map(|(c, _)| c);
+                if let Some(conn) = conn_opt {
+                    self.handle_client(conn);
                 }
             }
 
@@ -471,23 +460,22 @@ impl Daemon {
 
             // ── Hot-plug (Linux only) ─────────────────────────────────────
             #[cfg(target_os = "linux")]
-            if let Some(idx) = devmon_pfd_idx {
-                if pfds[idx].revents & libc::POLLIN != 0 {
-                    if let Some(ref mut ino) = devmon {
-                        let mut buf = [0u8; 4096];
-                        if let Ok(events) = ino.read_events(&mut buf) {
-                            for event in events {
-                                if let Some(name) = event.name {
-                                    let name_str = name.to_str().unwrap_or("");
-                                    if name_str.starts_with("event") {
-                                        let path = format!("/dev/input/{}", name_str);
-                                        if let Ok(mut dev) = Device::init(&path) {
-                                            let kbd_idx = manage_device(&self.keyboards, &mut dev);
-                                            eprintln!("DEVICE: hot-plugged {}", path);
-                                            self.devices.push(dev);
-                                            self.device_kbd.push(kbd_idx);
-                                        }
-                                    }
+            if let Some((_idx, ino)) = devmon_pfd_idx
+                .filter(|&idx| pfds[idx].revents & libc::POLLIN != 0)
+                .and_then(|idx| devmon.as_mut().map(|ino| (idx, ino)))
+            {
+                let mut buf = [0u8; 4096];
+                if let Ok(events) = ino.read_events(&mut buf) {
+                    for event in events {
+                        if let Some(name) = event.name {
+                            let name_str = name.to_str().unwrap_or("");
+                            if name_str.starts_with("event") {
+                                let path = format!("/dev/input/{}", name_str);
+                                if let Ok(mut dev) = Device::init(&path) {
+                                    let kbd_idx = manage_device(&self.keyboards, &mut dev);
+                                    eprintln!("DEVICE: hot-plugged {}", path);
+                                    self.devices.push(dev);
+                                    self.device_kbd.push(kbd_idx);
                                 }
                             }
                         }

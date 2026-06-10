@@ -29,25 +29,21 @@ pub fn set_layer_entry(config: &mut Config, layer_idx: usize, key: &str, d: Desc
             } else {
                 // Try alias
                 let mut found_alias = false;
-                for i in 0..config.aliases.len() {
-                    if config.aliases[i].0 == part {
-                        if let Some((code, _)) = parse_key_sequence(&config.aliases[i].1) {
-                            keys[sz] = code;
-                            sz += 1;
-                            found_alias = true;
-                            break;
-                        }
+                for alias in &config.aliases {
+                    if alias.0 == part && let Some((code, _)) = parse_key_sequence(&alias.1) {
+                        keys[sz] = code;
+                        sz += 1;
+                        found_alias = true;
+                        break;
                     }
                 }
                 if !found_alias {
                     // C-style alias lookup by name
-                    for i in 0..256 {
-                        if let Some(name) = KEYCODE_TABLE[i].name {
-                            if name == part || KEYCODE_TABLE[i].alt_name == Some(part) {
-                                keys[sz] = i as u8;
-                                sz += 1;
-                                break;
-                            }
+                    for (i, ent) in KEYCODE_TABLE.iter().enumerate() {
+                        if let Some(name) = ent.name && (name == part || ent.alt_name == Some(part)) {
+                            keys[sz] = i as u8;
+                            sz += 1;
+                            break;
                         }
                     }
                 }
@@ -84,11 +80,9 @@ pub fn set_layer_entry(config: &mut Config, layer_idx: usize, key: &str, d: Desc
                 config.layers[layer_idx].keymap[code as usize] = d;
             } else {
                 // Try one more time with general alias lookup (target matches key)
-                for i in 0..config.aliases.len() {
-                    if config.aliases[i].1 == key {
-                         if let Some((code, _)) = parse_key_sequence(&config.aliases[i].0) {
-                             config.layers[layer_idx].keymap[code as usize] = d;
-                         }
+                for alias in &config.aliases {
+                    if alias.1 == key && let Some((code, _)) = parse_key_sequence(&alias.0) {
+                        config.layers[layer_idx].keymap[code as usize] = d;
                     }
                 }
             }
@@ -194,13 +188,11 @@ pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, 
         } else if section.name == "aliases" {
             for entry in &section.entries {
                 if let Some(ref val) = entry.val {
-                    if let Some((code, _)) = parse_key_sequence(&entry.key) {
-                        if let Some((alias_code, _)) = parse_key_sequence(val) {
-                            config.layers[main_idx].keymap[code as usize] = Descriptor {
-                                op: Op::KeySequence,
-                                data: DescriptorData::KeySequence(DescKeySequence { code: alias_code, mods: 0 }),
-                            };
-                        }
+                    if let Some((code, _)) = parse_key_sequence(&entry.key) && let Some((alias_code, _)) = parse_key_sequence(val) {
+                        config.layers[main_idx].keymap[code as usize] = Descriptor {
+                            op: Op::KeySequence,
+                            data: DescriptorData::KeySequence(DescKeySequence { code: alias_code, mods: 0 }),
+                        };
                     }
                     config.aliases.push((entry.key.clone(), val.clone()));
                 }

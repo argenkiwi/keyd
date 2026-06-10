@@ -97,7 +97,9 @@ pub fn ipc_create_server() -> io::Result<(UnixListener, fs::File)> {
     let lock_path = format!("{}.lock", SOCKET_PATH);
     let lock_file = fs::OpenOptions::new()
         .read(true)
+        .write(true)
         .create(true)
+        .truncate(false)
         .open(&lock_path)?;
 
     // Non-blocking exclusive lock — fails immediately if another daemon owns it.

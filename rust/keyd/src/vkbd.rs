@@ -88,8 +88,8 @@ mod linux {
             ioctl(fd, UI_SET_EVBIT, EV_LED as i32);
             ioctl(fd, UI_SET_EVBIT, EV_SYN as i32);
 
-            for code in 0..256 {
-                if KEYCODE_TABLE[code].name.is_some() {
+            for (code, ent) in KEYCODE_TABLE.iter().enumerate() {
+                if ent.name.is_some() {
                     ioctl(fd, UI_SET_KEYBIT, code as i32);
                 }
             }
@@ -107,8 +107,8 @@ mod linux {
 
             let name_bytes = name.as_bytes();
             let len = std::cmp::min(name_bytes.len(), udev.name.len() - 1);
-            for i in 0..len {
-                udev.name[i] = name_bytes[i] as c_char;
+            for (i, &byte) in name_bytes.iter().enumerate().take(len) {
+                udev.name[i] = byte as c_char;
             }
 
             let udev_slice = unsafe {
@@ -155,8 +155,8 @@ mod linux {
 
             let name_bytes = name.as_bytes();
             let len = std::cmp::min(name_bytes.len(), udev.name.len() - 1);
-            for i in 0..len {
-                udev.name[i] = name_bytes[i] as c_char;
+            for (i, &byte) in name_bytes.iter().enumerate().take(len) {
+                udev.name[i] = byte as c_char;
             }
 
             let udev_slice = unsafe {

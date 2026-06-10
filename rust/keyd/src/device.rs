@@ -96,6 +96,7 @@ fn ioc_r(size: u32, nr: u8) -> libc::c_ulong {
 }
 #[cfg(target_os = "linux")]
 #[inline]
+#[allow(dead_code)]
 fn ioc_w(size: u32, nr: u8) -> libc::c_ulong {
     ((1u32 << 30) | (size << 16) | (b'E' as u32) << 8 | nr as u32) as libc::c_ulong
 }
@@ -266,10 +267,8 @@ impl Device {
             for entry in entries.flatten() {
                 let path = entry.path();
                 let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if fname.starts_with("event") {
-                    if let Ok(dev) = Device::init(path.to_str().unwrap()) {
-                        devices.push(dev);
-                    }
+                if fname.starts_with("event") && let Ok(dev) = Device::init(path.to_str().unwrap()) {
+                    devices.push(dev);
                 }
             }
         }

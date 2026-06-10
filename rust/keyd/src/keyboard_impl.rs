@@ -79,10 +79,8 @@ impl Keyboard {
 
     fn cache_get(&self, code: u8) -> Option<CacheEntry> {
         for i in 0..16 {
-            if let Some(c) = self.cache[i] {
-                if c.code == code {
-                    return Some(c);
-                }
+            if let Some(c) = self.cache[i].filter(|c| c.code == code) {
+                return Some(c);
             }
         }
         None
@@ -209,11 +207,9 @@ impl Keyboard {
         self.layer_state[idx].active += 1;
         // Update the cache entry for the activating key so its layer reflects the new layer.
         for i in 0..16 {
-            if let Some(ref mut ce) = self.cache[i] {
-                if ce.code == code {
-                    ce.layer = idx as i32;
-                    break;
-                }
+            if let Some(ce) = self.cache[i].as_mut().filter(|ce| ce.code == code) {
+                ce.layer = idx as i32;
+                break;
             }
         }
         output.on_layer_change(self, idx, 1);
@@ -230,11 +226,9 @@ impl Keyboard {
     fn clear<O: Output>(&mut self, output: &mut O) {
         self.clear_oneshot(output);
         for i in 1..self.config.layers.len() {
-            if self.config.layers[i].layer_type != LayerType::Layout {
-                if self.layer_state[i].toggled != 0 {
-                    self.layer_state[i].toggled = 0;
-                    self.deactivate_layer(output, i);
-                }
+            if self.config.layers[i].layer_type != LayerType::Layout && self.layer_state[i].toggled != 0 {
+                self.layer_state[i].toggled = 0;
+                self.deactivate_layer(output, i);
             }
         }
         self.macro_play.active_idx = None;
@@ -830,10 +824,8 @@ impl Keyboard {
                 };
                 if pressed != 0 {
                     // LayerM: execute macro before activating the layer.
-                    if d.op == Op::LayerM {
-                        if let DescriptorData::LayerMacro(lm) = d.data {
-                            self.execute_macro(output, layer, lm.macro_idx as usize);
-                        }
+                    if d.op == Op::LayerM && let DescriptorData::LayerMacro(lm) = d.data {
+                        self.execute_macro(output, layer, lm.macro_idx as usize);
                     }
                     self.activate_layer(output, code, idx, time);
                 } else {
@@ -851,10 +843,8 @@ impl Keyboard {
             }
 
             Op::Layout => {
-                if pressed != 0 {
-                    if let DescriptorData::Layer(l) = d.data {
-                        self.setlayout(output, l.idx as usize);
-                    }
+                if pressed != 0 && let DescriptorData::Layer(l) = d.data {
+                    self.setlayout(output, l.idx as usize);
                 }
             }
 
@@ -873,10 +863,8 @@ impl Keyboard {
                     }
                     self.update_mods(output, -1, 0);
                     self.clear_oneshot(output);
-                    if d.op == Op::ToggleM {
-                        if let DescriptorData::LayerMacro(lm) = d.data {
-                            self.execute_macro(output, layer, lm.macro_idx as usize);
-                        }
+                    if d.op == Op::ToggleM && let DescriptorData::LayerMacro(lm) = d.data {
+                        self.execute_macro(output, layer, lm.macro_idx as usize);
                     }
                 }
             }
@@ -908,18 +896,17 @@ impl Keyboard {
                         // patch its descriptor to layer(idx), then swap activation.
                         let mut ce_code: Option<u8> = None;
                         for i in 0..16 {
-                            if let Some(ref mut ce) = self.cache[i] {
-                                if ce.layer == dl as i32
+                            if let Some(ce) = self.cache[i].as_mut().filter(|ce| {
+                                ce.layer == dl as i32
                                     && ce.layer != 0
                                     && self.config.layers[ce.layer as usize].layer_type == LayerType::Normal
-                                {
-                                    ce.d = Descriptor {
-                                        op: Op::Layer,
-                                        data: DescriptorData::Layer(DescLayer { idx: idx as i16 }),
-                                    };
-                                    ce_code = Some(ce.code);
-                                    break;
-                                }
+                            }) {
+                                ce.d = Descriptor {
+                                    op: Op::Layer,
+                                    data: DescriptorData::Layer(DescLayer { idx: idx as i16 }),
+                                };
+                                ce_code = Some(ce.code);
+                                break;
                             }
                         }
                         if let Some(activating_code) = ce_code {
@@ -928,10 +915,8 @@ impl Keyboard {
                             self.update_mods(output, -1, 0);
                         }
                     }
-                    if d.op == Op::SwapM {
-                        if let DescriptorData::LayerMacro(lm) = d.data {
-                            self.execute_macro(output, layer, lm.macro_idx as usize);
-                        }
+                    if d.op == Op::SwapM && let DescriptorData::LayerMacro(lm) = d.data {
+                        self.execute_macro(output, layer, lm.macro_idx as usize);
                     }
                 } else if d.op == Op::SwapM {
                     // On release: if macro is a single keysequence, send the key-up.
@@ -968,11 +953,9 @@ impl Keyboard {
                     self.execute_descriptor(output, ra, code, layer, 1, time);
                     // Patch the cache entry so the release undoes the repeated action.
                     for i in 0..16 {
-                        if let Some(ref mut ce) = self.cache[i] {
-                            if ce.code == code {
-                                ce.d = ra;
-                                break;
-                            }
+                        if let Some(ce) = self.cache[i].as_mut().filter(|ce| ce.code == code) {
+                            ce.d = ra;
+                            break;
                         }
                     }
                 }
@@ -1002,45 +985,42 @@ impl Keyboard {
             }
 
             Op::OverloadTimeout | Op::OverloadTimeoutTap => {
-                if let DescriptorData::OverloadTo(ov) = d.data {
-                    if pressed != 0 {
-                        // action1 = the tap descriptor; action2 = layer activation.
-                        let action1 = self.config.descriptors[ov.action_idx as usize];
-                        let action2 = Descriptor {
-                            op: Op::Layer,
-                            data: DescriptorData::Layer(DescLayer { idx: ov.layer_idx }),
-                        };
-                        let expiration = time + ov.timeout as i64;
-                        self.pending_overload = Some(OverloadState {
-                            code,
-                            dl: layer as u8,
-                            expiration,
-                            resolve_on_interrupt: if d.op == Op::OverloadTimeoutTap { 1 } else { 0 },
-                            queue: [KeyEvent { code: 0, pressed: 0, timestamp: 0 }; 32],
-                            queue_sz: 0,
-                            action1,
-                            action2,
-                        });
-                        self.schedule_timeout(expiration);
-                    }
+                if let DescriptorData::OverloadTo(ov) = d.data && pressed != 0 {
+                    // action1 = the tap descriptor; action2 = layer activation.
+                    let action1 = self.config.descriptors[ov.action_idx as usize];
+                    let action2 = Descriptor {
+                        op: Op::Layer,
+                        data: DescriptorData::Layer(DescLayer { idx: ov.layer_idx }),
+                    };
+                    let expiration = time + ov.timeout as i64;
+                    self.pending_overload = Some(OverloadState {
+                        code,
+                        dl: layer as u8,
+                        expiration,
+                        resolve_on_interrupt: if d.op == Op::OverloadTimeoutTap { 1 } else { 0 },
+                        queue: [KeyEvent { code: 0, pressed: 0, timestamp: 0 }; 32],
+                        queue_sz: 0,
+                        action1,
+                        action2,
+                    });
+                    self.schedule_timeout(expiration);
                 }
             }
 
             Op::OverloadIdleTimeout => {
-                if let DescriptorData::OverloadIdle(ov) = d.data {
-                    if pressed != 0 {
-                        let idle = time - self.last_simple_key_time;
-                        let action = if idle >= ov.timeout as i64 {
-                            self.config.descriptors[ov.action2_idx as usize]
-                        } else {
-                            self.config.descriptors[ov.action1_idx as usize]
-                        };
-                        self.execute_descriptor(output, action, code, layer, 1, time);
-                        // Patch cache so release uses the resolved action.
-                        for i in 0..16 {
-                            if let Some(ref mut ce) = self.cache[i] {
-                                if ce.code == code { ce.d = action; break; }
-                            }
+                if let DescriptorData::OverloadIdle(ov) = d.data && pressed != 0 {
+                    let idle = time - self.last_simple_key_time;
+                    let action = if idle >= ov.timeout as i64 {
+                        self.config.descriptors[ov.action2_idx as usize]
+                    } else {
+                        self.config.descriptors[ov.action1_idx as usize]
+                    };
+                    self.execute_descriptor(output, action, code, layer, 1, time);
+                    // Patch cache so release uses the resolved action.
+                    for i in 0..16 {
+                        if let Some(ce) = self.cache[i].as_mut().filter(|ce| ce.code == code) {
+                            ce.d = action;
+                            break;
                         }
                     }
                 }
@@ -1082,10 +1062,8 @@ impl Keyboard {
 
                 if pressed != 0 {
                     // OneshotM: execute macro before activating the layer.
-                    if d.op == Op::OneshotM {
-                        if let DescriptorData::LayerMacro(lm) = d.data {
-                            self.execute_macro(output, layer, lm.macro_idx as usize);
-                        }
+                    if d.op == Op::OneshotM && let DescriptorData::LayerMacro(lm) = d.data {
+                        self.execute_macro(output, layer, lm.macro_idx as usize);
                     }
                     // OneshotK: also fire the nested key descriptor on press.
                     if let Some(ai) = nested_idx {
@@ -1176,18 +1154,16 @@ impl Keyboard {
             }
 
             Op::Command => {
-                if pressed != 0 {
-                    if let DescriptorData::Command(cmd_d) = d.data {
-                        let cmd = self.config.commands[cmd_d.cmd_idx as usize].cmd.clone();
-                        let _ = std::process::Command::new("/bin/sh")
-                            .args(["-c", &cmd])
-                            .stdin(std::process::Stdio::null())
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .spawn();
-                        self.clear_oneshot(output);
-                        self.update_mods(output, -1, 0);
-                    }
+                if pressed != 0 && let DescriptorData::Command(cmd_d) = d.data {
+                    let cmd = self.config.commands[cmd_d.cmd_idx as usize].cmd.clone();
+                    let _ = std::process::Command::new("/bin/sh")
+                        .args(["-c", &cmd])
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
+                    self.clear_oneshot(output);
+                    self.update_mods(output, -1, 0);
                 }
             }
 

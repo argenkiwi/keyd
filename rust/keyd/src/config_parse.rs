@@ -3,6 +3,7 @@ use crate::macro_types::*;
 use crate::keys::*;
 use crate::macro_parse::{macro_parse, str_escape};
 
+#[derive(Default)]
 pub struct ParseCtx {
     pub current_line: usize,
     pub current_file: Option<String>,
@@ -11,11 +12,7 @@ pub struct ParseCtx {
 
 impl ParseCtx {
     pub fn new() -> Self {
-        Self {
-            current_line: 0,
-            current_file: None,
-            nr_warnings: 0,
-        }
+        Self::default()
     }
 }
 
@@ -29,12 +26,9 @@ pub fn config_warn(ctx: &mut ParseCtx, msg: &str) {
 }
 
 pub fn config_lookup_keycode(name: &str) -> u8 {
-    for i in 0..256 {
-        let ent = &KEYCODE_TABLE[i];
-        if let Some(n) = ent.name {
-            if n == name || ent.alt_name == Some(name) {
-                return i as u8;
-            }
+    for (i, ent) in KEYCODE_TABLE.iter().enumerate() {
+        if let Some(n) = ent.name && (n == name || ent.alt_name == Some(name)) {
+            return i as u8;
         }
     }
     0

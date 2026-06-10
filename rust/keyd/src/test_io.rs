@@ -2,13 +2,14 @@ use crate::config::*;
 use crate::config_impl::*;
 use crate::keyboard_types::*;
 
+#[derive(Default)]
 pub struct TestOutput {
     pub events: Vec<KeyEvent>,
 }
 
 impl TestOutput {
     pub fn new() -> Self {
-        Self { events: Vec::new() }
+        Self::default()
     }
 }
 

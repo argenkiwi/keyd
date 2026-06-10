@@ -1,7 +1,8 @@
 pub const MAX_MACRO_ENTRIES: usize = 256;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum MacroEntryType {
+    #[default]
     KeySequence,
     Hold,
     Release,
@@ -9,7 +10,7 @@ pub enum MacroEntryType {
     Timeout,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct MacroEntry {
     pub entry_type: MacroEntryType,
     pub data: u16,
@@ -21,11 +22,17 @@ pub struct Macro {
     pub sz: u32,
 }
 
-impl Macro {
-    pub fn new() -> Self {
+impl Default for Macro {
+    fn default() -> Self {
         Self {
             entries: [MacroEntry { entry_type: MacroEntryType::KeySequence, data: 0 }; MAX_MACRO_ENTRIES],
             sz: 0,
         }
+    }
+}
+
+impl Macro {
+    pub fn new() -> Self {
+        Self::default()
     }
 }

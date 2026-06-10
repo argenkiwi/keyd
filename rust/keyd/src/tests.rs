@@ -1,7 +1,5 @@
-#[cfg(test)]
-mod tests {
-    use crate::config::*;
-    use crate::config_impl::*;
+use crate::config::*;
+use crate::config_impl::*;
     use crate::config_parse::{config_parse_descriptor, config_parse_macro_expression, ParseCtx};
     use crate::keys::*;
     use crate::macro_types::MacroEntryType;
@@ -255,4 +253,3 @@ mod tests {
         let res = config_add_entry(&mut cfg, "nonexistent_layer.a = b");
         assert!(res.is_err());
     }
-}

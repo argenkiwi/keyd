@@ -59,29 +59,22 @@ pub fn macro_parse(s: &str) -> Result<Macro, String> {
                 let mut found = false;
                 if c.is_ascii() && (c as u32) < 128 {
                     let c_str = c.to_string();
-                    for i in 0..256 {
-                        let ent = &KEYCODE_TABLE[i];
-                        if let Some(name) = ent.name {
-                            if name == c_str {
-                                add_entry(&mut macro_obj, MacroEntryType::KeySequence, i as u16)?;
-                                found = true;
-                                break;
-                            }
+                    for (i, ent) in KEYCODE_TABLE.iter().enumerate() {
+                        if ent.name.filter(|&n| n == c_str).is_some() {
+                            add_entry(&mut macro_obj, MacroEntryType::KeySequence, i as u16)?;
+                            found = true;
+                            break;
                         }
-                        if let Some(shifted) = ent.shifted_name {
-                            if shifted == c_str {
-                                add_entry(&mut macro_obj, MacroEntryType::KeySequence, ((MOD_SHIFT as u16) << 8) | (i as u16))?;
-                                found = true;
-                                break;
-                            }
+                        if ent.shifted_name.filter(|&s| s == c_str).is_some() {
+                            add_entry(&mut macro_obj, MacroEntryType::KeySequence, ((MOD_SHIFT as u16) << 8) | (i as u16))?;
+                            found = true;
+                            break;
                         }
                     }
                 }
-                if !found {
-                    if let Some(idx) = unicode_lookup_index(c as u32) {
-                        add_entry(&mut macro_obj, MacroEntryType::Unicode, idx as u16)?;
-                        found = true;
-                    }
+                if let Some(idx) = (!found).then(|| unicode_lookup_index(c as u32)).flatten() {
+                    add_entry(&mut macro_obj, MacroEntryType::Unicode, idx as u16)?;
+                    found = true;
                 }
                 if !found {
                     // C code just skips if not found or errors?

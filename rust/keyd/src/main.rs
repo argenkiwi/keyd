@@ -171,13 +171,12 @@ fn main() {
 
         // ── list-keys ──────────────────────────────────────────────────────
         Some(Commands::ListKeys) => {
-            for i in 0..256 {
-                let ent = &KEYCODE_TABLE[i];
-                if let Some(name) = ent.name    { println!("{}", name); }
-                if let Some(alt)  = ent.alt_name {
-                    if !alt.is_empty() { println!("{}", alt); }
+            for ent in &KEYCODE_TABLE {
+                if let Some(name) = ent.name { println!("{}", name); }
+                if let Some(alt) = ent.alt_name.filter(|s| !s.is_empty()) {
+                    println!("{}", alt);
                 }
-                if let Some(sh)   = ent.shifted_name { println!("{}", sh); }
+                if let Some(sh) = ent.shifted_name { println!("{}", sh); }
             }
         }
 

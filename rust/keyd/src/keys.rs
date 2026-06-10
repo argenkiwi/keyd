@@ -607,13 +607,10 @@ pub fn parse_key_sequence(s: &str) -> Option<(u8, u8)> {
         c = &c[2..];
     }
 
-    for i in 0..256 {
-        let ent = &KEYCODE_TABLE[i];
+    for (i, ent) in KEYCODE_TABLE.iter().enumerate() {
         if let Some(name) = ent.name {
-            if let Some(shifted) = ent.shifted_name {
-                if shifted == c {
-                    return Some((i as u8, mods | MOD_SHIFT));
-                }
+            if let Some(shifted) = ent.shifted_name && shifted == c {
+                return Some((i as u8, mods | MOD_SHIFT));
             }
             if name == c || ent.alt_name == Some(c) {
                 return Some((i as u8, mods));
