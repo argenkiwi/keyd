@@ -17,6 +17,85 @@ fn create_layer(config: &mut Config, name: &str, layer_type: LayerType) -> usize
     idx
 }
 
+pub fn set_layer_entry(config: &mut Config, layer_idx: usize, key: &str, d: Descriptor) {
+    if key.contains('+') {
+        let mut keys = [0u8; 8];
+        let mut sz = 0;
+        for part in key.split('+') {
+            if sz >= 8 { break; }
+            if let Some((code, _)) = parse_key_sequence(part) {
+                keys[sz] = code;
+                sz += 1;
+            } else {
+                // Try alias
+                let mut found_alias = false;
+                for i in 0..config.aliases.len() {
+                    if config.aliases[i].0 == part {
+                        if let Some((code, _)) = parse_key_sequence(&config.aliases[i].1) {
+                            keys[sz] = code;
+                            sz += 1;
+                            found_alias = true;
+                            break;
+                        }
+                    }
+                }
+                if !found_alias {
+                    // C-style alias lookup by name
+                    for i in 0..256 {
+                        if let Some(name) = KEYCODE_TABLE[i].name {
+                            if name == part || KEYCODE_TABLE[i].alt_name == Some(part) {
+                                keys[sz] = i as u8;
+                                sz += 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let nr_chords = config.layers[layer_idx].nr_chords;
+        if nr_chords < 64 {
+            config.layers[layer_idx].chords[nr_chords] = Chord {
+                keys,
+                sz,
+                d,
+            };
+            config.layers[layer_idx].nr_chords += 1;
+        }
+    } else {
+        let mut found = false;
+        // Check exact aliases first (like C's strcpy(config->aliases[code], name))
+        // Actually C checks all aliases: for (i = 0; i < 256; i++) if (!strcmp(config->aliases[i], key)) ...
+        // Our aliases are (alias_name, target_name).
+        let aliases_to_check: Vec<String> = config.aliases.iter()
+            .filter(|(name, _target)| name == key)
+            .map(|(_name, target)| target.clone())
+            .collect();
+        
+        for target in aliases_to_check {
+            if let Some((code, _)) = parse_key_sequence(&target) {
+                config.layers[layer_idx].keymap[code as usize] = d;
+                found = true;
+            }
+        }
+
+        if !found {
+            if let Some((code, _)) = parse_key_sequence(key) {
+                config.layers[layer_idx].keymap[code as usize] = d;
+            } else {
+                // Try one more time with general alias lookup (target matches key)
+                for i in 0..config.aliases.len() {
+                    if config.aliases[i].1 == key {
+                         if let Some((code, _)) = parse_key_sequence(&config.aliases[i].0) {
+                             config.layers[layer_idx].keymap[code as usize] = d;
+                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, String> {
     let ini = ini_parse_string(content, None).ok_or("Failed to parse INI")?;
     let mut ctx = ParseCtx::new();
@@ -47,6 +126,33 @@ pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, 
     config.layers[meta_idx].mods = MOD_SUPER;
     let altgr_idx = create_layer(config, "altgr", LayerType::Normal);
     config.layers[altgr_idx].mods = MOD_ALT_GR;
+
+    // Default aliases
+    config.aliases.push(("leftshift".to_string(), "shift".to_string()));
+    config.aliases.push(("rightshift".to_string(), "shift".to_string()));
+    config.aliases.push(("leftalt".to_string(), "alt".to_string()));
+    config.aliases.push(("rightalt".to_string(), "altgr".to_string()));
+    config.aliases.push(("leftmeta".to_string(), "meta".to_string()));
+    config.aliases.push(("rightmeta".to_string(), "meta".to_string()));
+    config.aliases.push(("leftcontrol".to_string(), "control".to_string()));
+    config.aliases.push(("rightcontrol".to_string(), "control".to_string()));
+
+    // Default mappings
+    let defaults = [
+        ("shift", Op::Layer, shift_idx as i16),
+        ("alt", Op::Layer, alt_idx as i16),
+        ("altgr", Op::Layer, altgr_idx as i16),
+        ("meta", Op::Layer, meta_idx as i16),
+        ("control", Op::Layer, control_idx as i16),
+    ];
+
+    for (name, op, idx) in defaults {
+        let desc = Descriptor {
+            op,
+            data: DescriptorData::Layer(DescLayer { idx }),
+        };
+        set_layer_entry(config, main_idx, name, desc);
+    }
 
     // Second pass: parse content
     for section in &ini.sections {
@@ -88,6 +194,14 @@ pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, 
         } else if section.name == "aliases" {
             for entry in &section.entries {
                 if let Some(ref val) = entry.val {
+                    if let Some((code, _)) = parse_key_sequence(&entry.key) {
+                        if let Some((alias_code, _)) = parse_key_sequence(val) {
+                            config.layers[main_idx].keymap[code as usize] = Descriptor {
+                                op: Op::KeySequence,
+                                data: DescriptorData::KeySequence(DescKeySequence { code: alias_code, mods: 0 }),
+                            };
+                        }
+                    }
                     config.aliases.push((entry.key.clone(), val.clone()));
                 }
             }
@@ -113,32 +227,9 @@ pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, 
             for entry in &section.entries {
                 ctx.current_line = entry.lnum - 1;
                 
-                if let Some((code, _)) = parse_key_sequence(&entry.key) {
-                    if let Some(ref val) = entry.val {
-                        let desc = config_parse_descriptor(val, config, &mut ctx)?;
-                        config.layers[layer_idx].keymap[code as usize] = desc;
-                    }
-                } else if entry.key.contains('+') {
-                    // Chord
-                    let mut keys = [0u8; 8];
-                    let mut sz = 0;
-                    for part in entry.key.split('+') {
-                        if sz >= 8 { break; }
-                        if let Some((code, _)) = parse_key_sequence(part) {
-                            keys[sz] = code;
-                            sz += 1;
-                        }
-                    }
-                    if let Some(ref val) = entry.val {
-                        let desc = config_parse_descriptor(val, config, &mut ctx)?;
-                        let nr_chords = config.layers[layer_idx].nr_chords;
-                        config.layers[layer_idx].chords[nr_chords] = Chord {
-                            keys,
-                            sz,
-                            d: desc,
-                        };
-                        config.layers[layer_idx].nr_chords += 1;
-                    }
+                if let Some(ref val) = entry.val {
+                    let desc = config_parse_descriptor(val, config, &mut ctx)?;
+                    set_layer_entry(config, layer_idx, &entry.key, desc);
                 }
             }
         }

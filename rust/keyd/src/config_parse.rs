@@ -128,16 +128,17 @@ pub fn config_parse_descriptor(
 
     if let Some((code, mods)) = parse_key_sequence(s) {
         let layer = match code {
-            KEYD_LEFTSHIFT => Some("shift"),
-            KEYD_LEFTCTRL => Some("control"),
-            KEYD_LEFTMETA => Some("meta"),
+            KEYD_LEFTSHIFT | KEYD_RIGHTSHIFT => Some("shift"),
+            KEYD_LEFTCTRL | KEYD_RIGHTCTRL => Some("control"),
+            KEYD_LEFTMETA | KEYD_RIGHTMETA => Some("meta"),
             KEYD_LEFTALT => Some("alt"),
             KEYD_RIGHTALT => Some("altgr"),
             _ => None,
         };
 
         if let Some(layer_name) = layer {
-            config_warn(ctx, &format!("You should use layer({}) instead of assigning to {} directly.", layer_name, KEYCODE_TABLE[code as usize].name.unwrap_or("UNKNOWN")));
+            let key_name = KEYCODE_TABLE[code as usize].name.unwrap_or("UNKNOWN");
+            config_warn(ctx, &format!("You should use layer({}) instead of assigning to {} directly.", layer_name, key_name));
             if let Some(idx) = config_get_layer_index(config, layer_name) {
                 return Ok(Descriptor {
                     op: Op::Layer,

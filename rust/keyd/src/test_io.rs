@@ -109,6 +109,30 @@ mod tests {
     }
 
     #[test]
+    fn test_default_modifier_remapping() {
+        let mut cfg = Config::new();
+        config_parse_string(&mut cfg, "[ids]\n*\n").unwrap();
+        let mut kbd = Keyboard::new(cfg);
+        let mut output = TestOutput::new();
+
+        let events = [
+            KeyEvent { code: KEYD_LEFTSHIFT, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_A, pressed: 1, timestamp: 0 },
+            KeyEvent { code: KEYD_A, pressed: 0, timestamp: 0 },
+            KeyEvent { code: KEYD_LEFTSHIFT, pressed: 0, timestamp: 0 },
+        ];
+
+        kbd.kbd_process_events(&mut output, &events);
+
+        // Check if LEFTSHIFT was sent when A was pressed
+        let shift_pressed = output.events.iter().any(|ev| ev.code == KEYD_LEFTSHIFT && ev.pressed == 1);
+        assert!(shift_pressed);
+        
+        let a_pressed = output.events.iter().any(|ev| ev.code == KEYD_A && ev.pressed == 1);
+        assert!(a_pressed);
+    }
+
+    #[test]
     fn test_clear_op() {
         let mut cfg = Config::new();
         config_parse_string(&mut cfg,
