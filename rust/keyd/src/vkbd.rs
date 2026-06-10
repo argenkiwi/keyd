@@ -4,6 +4,7 @@ mod linux {
     use std::os::unix::io::{AsRawFd, RawFd};
     use std::io::Write;
     use std::sync::Mutex;
+    use crate::device::{KEYD_KEYBOARD_PRODUCT_ID, KEYD_POINTER_PRODUCT_ID, KEYD_VENDOR_ID};
     use crate::keys::*;
     use libc::*;
 
@@ -65,10 +66,12 @@ mod linux {
     }
 
     fn ioctl(fd: RawFd, request: u64, arg: c_int) -> c_int {
+        // SAFETY: fd is a valid uinput fd; request and arg are valid uinput ioctl values.
         unsafe { libc::ioctl(fd, request, arg) }
     }
 
     fn ioctl_no_arg(fd: RawFd, request: u64) -> c_int {
+        // SAFETY: fd is a valid uinput fd; request is a valid no-argument uinput ioctl.
         unsafe { libc::ioctl(fd, request) }
     }
 
@@ -100,10 +103,11 @@ mod linux {
 
             ioctl(fd, UI_SET_KEYBIT, KEY_ZOOM as i32);
 
+            // SAFETY: UinputUserDev is #[repr(C)] with integer and byte-array fields valid when zero-initialized.
             let mut udev: UinputUserDev = unsafe { std::mem::zeroed() };
             udev.id.bustype = BUS_USB;
-            udev.id.vendor = 0x0FAC;
-            udev.id.product = 0x0ADE;
+            udev.id.vendor = KEYD_VENDOR_ID;
+            udev.id.product = KEYD_KEYBOARD_PRODUCT_ID;
 
             let name_bytes = name.as_bytes();
             let len = std::cmp::min(name_bytes.len(), udev.name.len() - 1);
@@ -111,6 +115,7 @@ mod linux {
                 udev.name[i] = byte as c_char;
             }
 
+            // SAFETY: udev is a fully-initialized local value; the byte slice covers exactly size_of bytes.
             let udev_slice = unsafe {
                 std::slice::from_raw_parts(&udev as *const _ as *const u8, std::mem::size_of::<UinputUserDev>())
             };
@@ -146,10 +151,11 @@ mod linux {
                 ioctl(fd, UI_SET_KEYBIT, code as i32);
             }
 
+            // SAFETY: UinputUserDev is #[repr(C)] with integer and byte-array fields valid when zero-initialized.
             let mut udev: UinputUserDev = unsafe { std::mem::zeroed() };
             udev.id.bustype = BUS_USB;
-            udev.id.vendor = 0x0FAC;
-            udev.id.product = 0x1ADE;
+            udev.id.vendor = KEYD_VENDOR_ID;
+            udev.id.product = KEYD_POINTER_PRODUCT_ID;
             udev.absmax[ABS_X as usize] = 1024;
             udev.absmax[ABS_Y as usize] = 1024;
 
@@ -159,6 +165,7 @@ mod linux {
                 udev.name[i] = byte as c_char;
             }
 
+            // SAFETY: udev is a fully-initialized local value; the byte slice covers exactly size_of bytes.
             let udev_slice = unsafe {
                 std::slice::from_raw_parts(&udev as *const _ as *const u8, std::mem::size_of::<UinputUserDev>())
             };
@@ -210,7 +217,9 @@ mod linux {
         pub fn read_led_event(&self) -> Option<(u8, bool)> {
             #[repr(C)]
             struct Ev { time: libc::timeval, type_: u16, code: u16, value: i32 }
+            // SAFETY: Ev is #[repr(C)] with integer fields valid when zero-initialized.
             let mut ev: Ev = unsafe { std::mem::zeroed() };
+            // SAFETY: self.fd is a valid uinput fd; buffer pointer and size match Ev layout.
             let n = unsafe {
                 libc::read(self.fd.as_raw_fd(),
                            &mut ev as *mut _ as *mut c_void,
@@ -240,15 +249,18 @@ mod linux {
         }
 
         fn write_event(&self, fd: RawFd, type_: u16, code: u16, value: i32) {
+            // SAFETY: input_event is #[repr(C)] with integer fields valid when zero-initialized.
             let mut ev: input_event = unsafe { std::mem::zeroed() };
             ev.type_ = type_;
             ev.code = code;
             ev.value = value;
 
+            // SAFETY: ev is fully initialized; the byte slice covers exactly size_of bytes.
             let ev_slice = unsafe {
                 std::slice::from_raw_parts(&ev as *const _ as *const u8, std::mem::size_of::<input_event>())
             };
 
+            // SAFETY: fd is a valid uinput fd; buffer pointer and size are correct.
             unsafe {
                 libc::write(fd, ev_slice.as_ptr() as *const c_void, ev_slice.len());
             }
@@ -297,9 +309,9 @@ mod macos_vkbd {
                 loop {
                     // Wait until a key is armed.
                     let (rev, key) = {
-                        let mut st = lock.lock().unwrap();
+                        let mut st = lock.lock().unwrap_or_else(|e| e.into_inner());
                         while !st.repeat.armed {
-                            st = cvar.wait(st).unwrap();
+                            st = cvar.wait(st).unwrap_or_else(|e| e.into_inner());
                         }
                         (st.repeat.revision, st.repeat.key)
                     };
@@ -308,7 +320,7 @@ mod macos_vkbd {
 
                     // Fire repeats at the system interval until cancelled.
                     loop {
-                        let st = lock.lock().unwrap();
+                        let st = lock.lock().unwrap_or_else(|e| e.into_inner());
                         if st.repeat.revision != rev {
                             break;
                         }
@@ -333,14 +345,11 @@ mod macos_vkbd {
                 return;
             }
 
-            let cgkey = match macos_input::keyd_to_cgkey_code(code) {
-                Some(k) => k,
-                None    => return,
-            };
+            let Some(cgkey) = macos_input::keyd_to_cgkey_code(code) else { return };
 
             let (lock, cvar) = &*self.shared;
             {
-                let mut st = lock.lock().unwrap();
+                let mut st = lock.lock().unwrap_or_else(|e| e.into_inner());
                 if (cgkey as usize) < 128 {
                     st.key_states[cgkey as usize] = state;
                 }
@@ -352,7 +361,7 @@ mod macos_vkbd {
 
             // Arm or cancel the software repeat timer for non-modifier keys.
             if !macos_input::is_modifier_cgkey(cgkey) {
-                let mut st = lock.lock().unwrap();
+                let mut st = lock.lock().unwrap_or_else(|e| e.into_inner());
                 if state != 0 {
                     st.repeat.key       = cgkey;
                     st.repeat.armed     = true;

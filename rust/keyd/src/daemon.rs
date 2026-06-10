@@ -1,3 +1,6 @@
+//! Main daemon loop — scans input devices, dispatches key events through keyboard state machines,
+//! and services IPC connections (bind, macro, reload, layer-listen).
+
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixListener;
 
@@ -29,6 +32,10 @@ impl PanicState {
 }
 use crate::device::*;
 use crate::vkbd::Vkbd;
+
+/// SCHED_FIFO priority for the daemon loop — high enough to preempt most user tasks.
+#[cfg(target_os = "linux")]
+const REALTIME_SCHED_PRIORITY: libc::c_int = 49;
 
 fn current_time_ms() -> i64 {
     use std::sync::OnceLock;
@@ -78,7 +85,9 @@ fn manage_device(keyboards: &[Keyboard], device: &mut Device) -> Option<usize> {
 fn write_led_fd(fd: RawFd, led: u8, state: bool) {
     #[repr(C)]
     struct Ev { time: libc::timeval, type_: u16, code: u16, value: i32 }
+    // SAFETY: libc::timeval contains only integer fields and is valid when zero-initialized.
     let ev = Ev { time: unsafe { std::mem::zeroed() }, type_: 0x11, code: led as u16, value: state as i32 };
+    // SAFETY: fd is a valid open device fd; pointer and size exactly match the Ev layout.
     unsafe { libc::write(fd, &ev as *const _ as *const libc::c_void, std::mem::size_of::<Ev>()); }
 }
 
@@ -90,13 +99,13 @@ fn input_text(vkbd: &Vkbd, text: &str, delay_us: u32) {
         let mut found = false;
 
         for (i, ent) in KEYCODE_TABLE.iter().enumerate() {
-            if ent.name.map(|n| n == s).unwrap_or(false) {
+            if ent.name.is_some_and(|n| n == s) {
                 vkbd.send_key(i as u8, 1);
                 vkbd.send_key(i as u8, 0);
                 found = true;
                 break;
             }
-            if ent.shifted_name.map(|n| n == s).unwrap_or(false) {
+            if ent.shifted_name.is_some_and(|n| n == s) {
                 vkbd.send_key(KEYD_LEFTSHIFT, 1);
                 vkbd.send_key(i as u8, 1);
                 vkbd.send_key(i as u8, 0);
@@ -148,6 +157,7 @@ pub struct Daemon {
 }
 
 impl Daemon {
+    /// Create a new daemon, initialising the virtual keyboard and IPC server socket.
     pub fn new() -> Result<Self, String> {
         let vkbd = Vkbd::init("keyd virtual keyboard")?;
         let ipc_server = crate::ipc::ipc_create_server().ok();
@@ -164,6 +174,7 @@ impl Daemon {
         })
     }
 
+    /// Parse a single `.conf` file and register the resulting keyboard config.
     pub fn load_config(&mut self, path: &str) -> Result<(), String> {
         let cfg = config_parse(path)?;
         self.keyboards.push(Keyboard::new(cfg));
@@ -178,14 +189,14 @@ impl Daemon {
             let mut paths: Vec<_> = entries
                 .flatten()
                 .map(|e| e.path())
-                .filter(|p| p.extension().map(|e| e == "conf").unwrap_or(false))
+                .filter(|p| p.extension().is_some_and(|e| e == "conf"))
                 .collect();
             paths.sort();
             for path in paths {
                 if let Some(p) = path.to_str() {
                     match config_parse(p) {
                         Ok(cfg) => { self.keyboards.push(Keyboard::new(cfg)); n += 1; }
-                        Err(e)  => eprintln!("WARNING: {}: {}", p, e),
+                        Err(e)  => eprintln!("WARNING: {p}: {e}"),
                     }
                 }
             }
@@ -217,11 +228,11 @@ impl Daemon {
         if let Ok(entries) = std::fs::read_dir(&self.config_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                let is_conf = path.extension().map(|e| e == "conf").unwrap_or(false);
+                let is_conf = path.extension().is_some_and(|e| e == "conf");
                 if let Some(p) = path.to_str().filter(|_| is_conf) {
                     match config_parse(p) {
                         Ok(cfg) => self.keyboards.push(Keyboard::new(cfg)),
-                        Err(e)  => eprintln!("WARNING: {}: {}", p, e),
+                        Err(e)  => eprintln!("WARNING: {p}: {e}"),
                     }
                 }
             }
@@ -238,27 +249,24 @@ impl Daemon {
         }
     }
 
-    fn send_success(&self, conn: &mut std::os::unix::net::UnixStream) {
+    fn send_success(conn: &mut std::os::unix::net::UnixStream) {
         let resp = IpcMessage::new(IpcMessageType::Success, 0);
         let _ = resp.write_to(conn);
     }
 
-    fn send_fail(&self, conn: &mut std::os::unix::net::UnixStream, msg: &str) {
+    fn send_fail(conn: &mut std::os::unix::net::UnixStream, msg: &str) {
         let mut resp = IpcMessage::new(IpcMessageType::Fail, 0);
         resp.set_data(msg.as_bytes());
         let _ = resp.write_to(conn);
     }
 
     fn handle_client(&mut self, mut conn: std::os::unix::net::UnixStream) {
-        let msg = match IpcMessage::read_from(&mut conn) {
-            Ok(m)  => m,
-            Err(_) => return,
-        };
+        let Ok(msg) = IpcMessage::read_from(&mut conn) else { return };
 
         match IpcMessageType::try_from(msg.msg_type) {
             Ok(IpcMessageType::Reload) => {
                 self.reload();
-                self.send_success(&mut conn);
+                Self::send_success(&mut conn);
             }
 
             Ok(IpcMessageType::Bind) => {
@@ -269,8 +277,8 @@ impl Daemon {
                         ok = true;
                     }
                 }
-                if ok { self.send_success(&mut conn); }
-                else  { self.send_fail(&mut conn, "bind failed"); }
+                if ok { Self::send_success(&mut conn); }
+                else  { Self::send_fail(&mut conn, "bind failed"); }
             }
 
             Ok(IpcMessageType::Macro) => {
@@ -280,9 +288,9 @@ impl Daemon {
                     Ok(mac) => {
                         let mut out = VkbdOutput { vkbd: &self.output.vkbd };
                         Keyboard::macro_execute_blocking(&mut out, &mac, seq_us);
-                        self.send_success(&mut conn);
+                        Self::send_success(&mut conn);
                     }
-                    Err(e) => self.send_fail(&mut conn, &e),
+                    Err(e) => Self::send_fail(&mut conn, &e),
                 }
             }
 
@@ -290,7 +298,7 @@ impl Daemon {
                 let text   = msg.data_str().to_string();
                 let delay  = msg.timeout;
                 input_text(&self.output.vkbd, &text, delay);
-                self.send_success(&mut conn);
+                Self::send_success(&mut conn);
             }
 
             Ok(IpcMessageType::LayerListen) => {
@@ -300,10 +308,14 @@ impl Daemon {
                 // Don't send a response — the connection stays open for streaming.
             }
 
-            _ => self.send_fail(&mut conn, "unknown command"),
+            _ => Self::send_fail(&mut conn, "unknown command"),
         }
     }
 
+    /// Enter the main event loop. Blocks until the process is killed or an unrecoverable error occurs.
+    ///
+    /// On Linux, sets real-time scheduling (`SCHED_FIFO`) and locks process memory
+    /// (`mlockall`) before entering the loop to reduce input latency.
     pub fn run(&mut self) -> Result<(), String> {
         self.devices = Device::scan();
         self.device_kbd = self.devices.iter_mut()
@@ -317,10 +329,12 @@ impl Daemon {
         // Linux: real-time scheduling and memory locking for low input latency.
         #[cfg(target_os = "linux")]
         {
-            let sp = libc::sched_param { sched_priority: 49 };
+            let sp = libc::sched_param { sched_priority: REALTIME_SCHED_PRIORITY };
+            // SAFETY: pid 0 means current process; SCHED_FIFO with priority 49 is a valid real-time policy.
             if unsafe { libc::sched_setscheduler(0, libc::SCHED_FIFO, &sp) } != 0 {
                 eprintln!("WARNING: sched_setscheduler: {}", std::io::Error::last_os_error());
             }
+            // SAFETY: MCL_CURRENT | MCL_FUTURE are valid mlockall flags with no memory-safety requirements.
             if unsafe { libc::mlockall(libc::MCL_CURRENT | libc::MCL_FUTURE) } != 0 {
                 eprintln!("WARNING: mlockall: {}", std::io::Error::last_os_error());
             }
@@ -376,6 +390,7 @@ impl Daemon {
             let poll_timeout = if timeout_ms < 0 { -1i32 }
                                else { timeout_ms.min(i32::MAX as i64) as i32 };
             let poll_start = current_time_ms();
+            // SAFETY: pfds is a valid, contiguous slice; nfds is the exact slice length; timeout is valid.
             let poll_ret = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, poll_timeout) };
             let now     = current_time_ms();
             let elapsed = now - poll_start;
@@ -383,7 +398,7 @@ impl Daemon {
             if poll_ret < 0 {
                 let err = std::io::Error::last_os_error();
                 if err.kind() != std::io::ErrorKind::Interrupted {
-                    eprintln!("ERROR: poll failed: {}", err);
+                    eprintln!("ERROR: poll failed: {err}");
                 }
                 continue;
             }
@@ -470,7 +485,7 @@ impl Daemon {
                         if let Some(name) = event.name {
                             let name_str = name.to_str().unwrap_or("");
                             if name_str.starts_with("event") {
-                                let path = format!("/dev/input/{}", name_str);
+                                let path = format!("/dev/input/{name_str}");
                                 if let Ok(mut dev) = Device::init(&path) {
                                     let kbd_idx = manage_device(&self.keyboards, &mut dev);
                                     eprintln!("DEVICE: hot-plugged {}", path);
@@ -539,10 +554,12 @@ impl<'a> Output for DaemonOutput<'a> {
         let msg_bytes = msg.as_bytes();
         let len = msg_bytes.len() as isize;
         self.listeners.retain(|&fd| {
+            // SAFETY: fd is a valid open socket fd added in LayerListen; buffer pointer and size are correct.
             let n = unsafe {
                 libc::write(fd, msg_bytes.as_ptr() as *const libc::c_void, msg_bytes.len())
             };
-            if n != len { unsafe { libc::close(fd) }; false } else { true }
+            // SAFETY: fd was written to above; close is safe when write fails (pipe broken, client gone).
+            if n == len { true } else { unsafe { libc::close(fd); }; false }
         });
     }
 }

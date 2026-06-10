@@ -1,5 +1,8 @@
+//! Core keyboard state machine types shared between `keyboard_impl` and the daemon.
+
 use crate::config::*;
 
+/// Cached descriptor for a currently-held key, so key-up can replay the same action.
 #[derive(Debug, Clone, Copy)]
 pub struct CacheEntry {
     pub code: u8,
@@ -8,15 +11,22 @@ pub struct CacheEntry {
     pub layer: i32,
 }
 
+/// A low-level keyboard event as produced by the input device layer.
 #[derive(Debug, Clone, Copy)]
 pub struct KeyEvent {
+    /// evdev or CGEvent keycode (0 = synthetic timeout tick).
     pub code: u8,
+    /// 1 = key-down, 0 = key-up.
     pub pressed: u8,
+    /// Milliseconds since daemon start (wraps at i32::MAX).
     pub timestamp: i32,
 }
 
+/// Sink for processed keyboard output — implemented by the daemon adapter and test stubs.
 pub trait Output {
+    /// Send a key-down (`state = 1`) or key-up (`state = 0`) to the virtual keyboard.
     fn send_key(&mut self, code: u8, state: u8);
+    /// Called whenever a layer's active state changes so the UI can update indicators.
     fn on_layer_change(&mut self, kbd: &Keyboard, layer_idx: usize, active: u8);
 }
 
@@ -91,10 +101,13 @@ pub struct ScrollState {
     pub active: i32,
 }
 
+/// A single keyboard instance with its full remapping configuration and runtime state.
+///
+/// One `Keyboard` exists per loaded `.conf` file. The daemon feeds raw
+/// [`KeyEvent`]s to [`Keyboard::kbd_process_events`] and receives processed
+/// output via the [`Output`] trait.
 pub struct Keyboard {
     pub config: Config,
-    // Output trait object or similar will be needed.
-    // For now, let's keep the fields.
     pub cache: [Option<CacheEntry>; 16],
     pub last_pressed_output_code: u8,
     pub last_pressed_code: u8,

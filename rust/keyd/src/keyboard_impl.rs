@@ -1,8 +1,11 @@
+//! Keyboard state machine — processes raw key events through layers, chords, macros, and overloads.
+
 use crate::config::*;
 use crate::keyboard_types::*;
 use crate::keys::*;
 
 impl Keyboard {
+    /// Create a new keyboard instance from a parsed config.
     pub fn new(config: Config) -> Self {
         Self {
             config,
@@ -141,10 +144,11 @@ impl Keyboard {
         // Let through key-up events for keys that were already held *before* the
         // pending overload started (they won't be in the queue and aren't the overload key).
         if code != 0 && pressed == 0 {
-            let known = {
-                let po = self.pending_overload.as_ref().unwrap();
+            let known = if let Some(po) = self.pending_overload.as_ref() {
                 code == po.code
                     || po.queue[..po.queue_sz].iter().any(|e| e.code == code)
+            } else {
+                return false;
             };
             if !known {
                 return false;
@@ -153,16 +157,16 @@ impl Keyboard {
 
         // Enqueue real (non-synthetic) events.
         if code != 0 {
-            let po = self.pending_overload.as_mut().unwrap();
-            if po.queue_sz < po.queue.len() {
-                po.queue[po.queue_sz] = KeyEvent { code, pressed, timestamp: time as i32 };
-                po.queue_sz += 1;
+            if let Some(po) = self.pending_overload.as_mut() {
+                if po.queue_sz < po.queue.len() {
+                    po.queue[po.queue_sz] = KeyEvent { code, pressed, timestamp: time as i32 };
+                    po.queue_sz += 1;
+                }
             }
         }
 
         // Decide if we can resolve now.
-        let resolve: Option<Descriptor> = {
-            let po = self.pending_overload.as_ref().unwrap();
+        let resolve: Option<Descriptor> = if let Some(po) = self.pending_overload.as_ref() {
             if time >= po.expiration {
                 Some(po.action2)                               // timeout → hold action
             } else if code == po.code && pressed == 0 {
@@ -172,16 +176,19 @@ impl Keyboard {
             } else {
                 None
             }
+        } else {
+            None
         };
 
         if let Some(action) = resolve {
             // Snapshot the queue before mutating self.
-            let (overload_code, dl, queue_snap, queue_sz) = {
-                let po = self.pending_overload.as_ref().unwrap();
+            let (overload_code, dl, queue_snap, queue_sz) = if let Some(po) = self.pending_overload.as_ref() {
                 let sz = po.queue_sz;
                 let mut q = [KeyEvent { code: 0, pressed: 0, timestamp: 0 }; 32];
                 q[..sz].copy_from_slice(&po.queue[..sz]);
                 (po.code, po.dl as i32, q, sz)
+            } else {
+                return true; // pending_overload was cleared concurrently — nothing to replay
             };
 
             self.pending_overload = None;
@@ -224,7 +231,7 @@ impl Keyboard {
     }
 
     fn deactivate_layer<O: Output>(&mut self, output: &mut O, idx: usize) {
-        debug_assert!(self.layer_state[idx].active > 0, "deactivate_layer called on inactive layer {}", idx);
+        debug_assert!(self.layer_state[idx].active > 0, "deactivate_layer called on inactive layer {idx}");
         if self.layer_state[idx].active > 0 {
             self.layer_state[idx].active -= 1;
         }
@@ -294,10 +301,8 @@ impl Keyboard {
                 if self.keystate[m.key as usize] == 0 {
                     self.send_key(output, m.key, 1);
                 }
-            } else {
-                if self.keystate[m.key as usize] != 0 {
-                    self.clear_mod(output, m.key);
-                }
+            } else if self.keystate[m.key as usize] != 0 {
+                self.clear_mod(output, m.key);
             }
         }
     }
@@ -391,10 +396,7 @@ impl Keyboard {
     fn play_macro_step<O: Output>(&mut self, output: &mut O, time: i64) {
         use crate::macro_types::MacroEntryType;
 
-        let macro_idx = match self.macro_play.active_idx {
-            Some(idx) => idx,
-            None => return,
-        };
+        let Some(macro_idx) = self.macro_play.active_idx else { return };
 
         let mac = self.config.macros[macro_idx];
         let seq_timeout_ms = self.config.macro_sequence_timeout;
@@ -571,7 +573,7 @@ impl Keyboard {
             }
         }
 
-        let ret = if full { if partial { 3 } else { 2 } } else if partial { 1 } else { 0 };
+        let ret = i32::from(full) * 2 + i32::from(partial);
         (ret, best_ci, best_layer)
     }
 
@@ -790,9 +792,12 @@ impl Keyboard {
         (self.config.layers[main_idx].keymap[code as usize], main_idx as i32)
     }
 
+    /// Process a batch of key events and return the milliseconds until the next pending timeout,
+    /// or -1 if no timeout is pending. Pass a single synthetic event with `code = 0` to tick
+    /// timeouts without any key input.
     pub fn kbd_process_events<O: Output>(&mut self, output: &mut O, events: &[KeyEvent]) -> i64 {
         let mut i = 0;
-        let mut time: i64 = events.first().map(|e| e.timestamp as i64).unwrap_or(0);
+        let mut time: i64 = events.first().map_or(0, |e| e.timestamp as i64);
 
         while i < events.len() {
             let ev = &events[i];
@@ -849,14 +854,12 @@ impl Keyboard {
                 // Store in cache before executing so re-entrant lookups work correctly.
                 self.cache_set(code, Some(CacheEntry { code, d, dl: layer, layer }));
                 self.execute_descriptor(output, d, code, layer, pressed, time);
-            } else {
-                if let Some(entry) = self.cache_get(code) {
-                    let d = entry.d;
-                    let layer = entry.layer;
-                    // Clear cache before executing so the key is no longer seen as held.
-                    self.cache_set(code, None);
-                    self.execute_descriptor(output, d, code, layer, pressed, time);
-                }
+            } else if let Some(entry) = self.cache_get(code) {
+                let d = entry.d;
+                let layer = entry.layer;
+                // Clear cache before executing so the key is no longer seen as held.
+                self.cache_set(code, None);
+                self.execute_descriptor(output, d, code, layer, pressed, time);
                 // Silently ignore releases with no matching press (already cleaned up).
             }
         }
@@ -1085,7 +1088,7 @@ impl Keyboard {
                         code,
                         dl: layer as u8,
                         expiration,
-                        resolve_on_interrupt: if d.op == Op::OverloadTimeoutTap { 1 } else { 0 },
+                        resolve_on_interrupt: i32::from(d.op == Op::OverloadTimeoutTap),
                         queue: [KeyEvent { code: 0, pressed: 0, timestamp: 0 }; 32],
                         queue_sz: 0,
                         action1,
@@ -1193,23 +1196,21 @@ impl Keyboard {
                         }
                         self.update_mods(output, layer, 0);
                         self.oneshot_latch = 1;
-                    } else {
-                        if self.oneshot_latch != 0 {
-                            for &i in lm.idx.iter().filter(|&&i| i != -1) {
-                                self.layer_state[i as usize].oneshot_depth += 1;
-                            }
-                            let ot = self.config.oneshot_timeout;
-                            if ot != 0 {
-                                let deadline = time + ot;
-                                self.oneshot_timeout = deadline;
-                                self.schedule_timeout(deadline);
-                            }
-                        } else {
-                            for &i in lm.idx.iter().filter(|&&i| i != -1) {
-                                self.deactivate_layer(output, i as usize);
-                            }
-                            self.update_mods(output, -1, 0);
+                    } else if self.oneshot_latch != 0 {
+                        for &i in lm.idx.iter().filter(|&&i| i != -1) {
+                            self.layer_state[i as usize].oneshot_depth += 1;
                         }
+                        let ot = self.config.oneshot_timeout;
+                        if ot != 0 {
+                            let deadline = time + ot;
+                            self.oneshot_timeout = deadline;
+                            self.schedule_timeout(deadline);
+                        }
+                    } else {
+                        for &i in lm.idx.iter().filter(|&&i| i != -1) {
+                            self.deactivate_layer(output, i as usize);
+                        }
+                        self.update_mods(output, -1, 0);
                     }
                 }
             }
@@ -1254,7 +1255,7 @@ impl Keyboard {
             Op::Scroll => {
                 if let DescriptorData::Scroll(s) = d.data {
                     self.scroll.sensitivity = s.sensitivity as i32;
-                    self.scroll.active = if pressed != 0 { 1 } else { 0 };
+                    self.scroll.active = i32::from(pressed != 0);
                 }
             }
             Op::ScrollToggleOn => {

@@ -97,7 +97,8 @@ pub fn ini_parse_string(s: &str, default_section_name: Option<&str>) -> Option<I
             }
         }
 
-        let section = &mut ini.sections[current_section.unwrap()];
+        let Some(idx) = current_section else { return None };
+        let section = &mut ini.sections[idx];
         let (key, val) = parse_kvp(line);
         section.entries.push(IniEntry {
             key,

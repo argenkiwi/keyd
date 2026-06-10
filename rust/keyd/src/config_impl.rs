@@ -1,3 +1,5 @@
+//! Config loading and matching — parses `.conf` files into `Config` structs and checks device IDs.
+
 use crate::config::*;
 use crate::config_parse::*;
 use crate::ini::*;
@@ -180,7 +182,7 @@ pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, 
                         "chord_hold_timeout" => config.chord_hold_timeout = val.parse().unwrap_or(0),
                         "layer_indicator" => config.layer_indicator = val.parse().unwrap_or(0),
                         "disable_modifier_guard" => config.disable_modifier_guard = val.parse().unwrap_or(0),
-                        "default_layout" => config.default_layout = val.clone(),
+                        "default_layout" => config.default_layout.clone_from(val),
                         _ => config_warn(&mut ctx, &format!("Unknown global option: {}", entry.key)),
                     }
                 }
@@ -198,7 +200,8 @@ pub fn config_parse_string(config: &mut Config, content: &str) -> Result<usize, 
                 }
             }
         } else {
-            let layer_idx = config_get_layer_index(config, &section.name).unwrap();
+            let layer_idx = config_get_layer_index(config, &section.name)
+                .ok_or_else(|| format!("internal error: layer '{}' missing after first pass", section.name))?;
             
             // Handle composite layer constituents
             if section.name.contains('+') {
@@ -267,17 +270,16 @@ pub fn config_check_match(config: &Config, id: &str, flags: u8) -> i32 {
             }
         }
     }
-    if config.wildcard != 0 { 1 } else { 0 }
+    i32::from(config.wildcard != 0)
 }
 
 pub fn config_parse(path: &str) -> Result<Config, String> {
     let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read {}: {}", path, e))?;
+        .map_err(|e| format!("Failed to read {path}: {e}"))?;
 
     let config_dir = std::path::Path::new(path)
         .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
+        .map_or_else(|| std::path::PathBuf::from("."), std::path::Path::to_path_buf);
 
     let preprocessed = preprocess_includes(&content, &config_dir)?;
 
@@ -296,18 +298,17 @@ fn preprocess_includes(content: &str, config_dir: &std::path::Path) -> Result<St
             match resolve_include_path(config_dir, include_path_str) {
                 Ok(resolved) => {
                     let included = std::fs::read_to_string(&resolved)
-                        .map_err(|e| format!("Failed to open include {}: {}", resolved, e))?;
+                        .map_err(|e| format!("Failed to open include {resolved}: {e}"))?;
                     let included_dir = std::path::Path::new(&resolved)
                         .parent()
-                        .map(|p| p.to_path_buf())
-                        .unwrap_or_else(|| config_dir.to_path_buf());
+                        .map_or_else(|| config_dir.to_path_buf(), std::path::Path::to_path_buf);
                     let nested = preprocess_includes(&included, &included_dir)?;
                     result.push_str(&nested);
                     if !result.ends_with('\n') {
                         result.push('\n');
                     }
                 }
-                Err(e) => eprintln!("WARNING: {}", e),
+                Err(e) => eprintln!("WARNING: {e}"),
             }
         } else {
             result.push_str(line);
@@ -327,7 +328,7 @@ fn resolve_include_path(config_dir: &std::path::Path, include_path: &str) -> Res
     if candidate.exists() {
         return Ok(candidate.to_string_lossy().into_owned());
     }
-    Err(format!("Failed to resolve include path: {}", include_path))
+    Err(format!("Failed to resolve include path: {include_path}"))
 }
 
 pub fn config_add_entry(config: &mut Config, exp: &str) -> Result<(), String> {
@@ -343,8 +344,8 @@ pub fn config_add_entry(config: &mut Config, exp: &str) -> Result<(), String> {
     let key_name = key_parts[1];
     let val = parts[1].trim();
 
-    let layer_idx = config_get_layer_index(config, layer_name).ok_or(format!("Layer {} not found", layer_name))?;
-    let (code, _) = parse_key_sequence(key_name).ok_or(format!("Invalid key {}", key_name))?;
+    let layer_idx = config_get_layer_index(config, layer_name).ok_or_else(|| format!("Layer {layer_name} not found"))?;
+    let (code, _) = parse_key_sequence(key_name).ok_or_else(|| format!("Invalid key {key_name}"))?;
     
     let mut ctx = ParseCtx::new();
     let desc = config_parse_descriptor(val, config, &mut ctx)?;

@@ -108,7 +108,9 @@ enum Commands {
 fn read_payload(args: &[String]) -> Vec<u8> {
     if args.is_empty() {
         let mut buf = Vec::new();
-        io::stdin().read_to_end(&mut buf).unwrap_or(0);
+        if let Err(e) = io::stdin().read_to_end(&mut buf) {
+            eprintln!("WARNING: failed to read stdin: {e}");
+        }
         buf
     } else {
         args.join(" ").into_bytes()
@@ -123,7 +125,7 @@ fn ipc_exec(msg_type: IpcMessageType, data: &[u8], timeout: u32) {
             if e.is_empty() {
                 eprintln!("ERROR: daemon returned failure");
             } else {
-                eprintln!("ERROR: {}", e);
+                eprintln!("ERROR: {e}");
             }
             process::exit(1);
         }
@@ -146,13 +148,13 @@ fn main() {
             };
 
             let mut daemon = Daemon::new().unwrap_or_else(|e| {
-                eprintln!("ERROR: {}", e);
+                eprintln!("ERROR: {e}");
                 process::exit(1);
             });
 
             if let Some(path) = single_config {
                 daemon.load_config(&path).unwrap_or_else(|e| {
-                    eprintln!("ERROR: {}", e);
+                    eprintln!("ERROR: {e}");
                     process::exit(1);
                 });
             } else {
@@ -164,7 +166,7 @@ fn main() {
 
             eprintln!("Starting keyd daemon...");
             daemon.run().unwrap_or_else(|e| {
-                eprintln!("ERROR: {}", e);
+                eprintln!("ERROR: {e}");
                 process::exit(1);
             });
         }
@@ -172,11 +174,11 @@ fn main() {
         // ── list-keys ──────────────────────────────────────────────────────
         Some(Commands::ListKeys) => {
             for ent in &KEYCODE_TABLE {
-                if let Some(name) = ent.name { println!("{}", name); }
+                if let Some(name) = ent.name { println!("{name}"); }
                 if let Some(alt) = ent.alt_name.filter(|s| !s.is_empty()) {
-                    println!("{}", alt);
+                    println!("{alt}");
                 }
-                if let Some(sh) = ent.shifted_name { println!("{}", sh); }
+                if let Some(sh) = ent.shifted_name { println!("{sh}"); }
             }
         }
 
@@ -200,9 +202,8 @@ fn main() {
                             if timestamp && last_ms != 0 {
                                 print!("+{} ms\t", now - last_ms);
                             }
-                            println!("{}\t{}\t{} {}",
-                                dev.name, dev.id, name,
-                                if ev.pressed != 0 { "down" } else { "up" });
+                            let dir = if ev.pressed != 0 { "down" } else { "up" };
+                            println!("{}\t{}\t{name} {dir}", dev.name, dev.id);
 
                             last_ms = now;
                             io::stdout().flush().ok();
@@ -219,8 +220,8 @@ fn main() {
                 let mut v: Vec<_> = std::fs::read_dir("/etc/keyd/")
                     .ok().into_iter().flatten().flatten()
                     .map(|e| e.path())
-                    .filter(|p| p.extension().map(|e| e == "conf").unwrap_or(false))
-                    .filter_map(|p| p.to_str().map(|s| s.to_string()))
+                    .filter(|p| p.extension().is_some_and(|e| e == "conf"))
+                    .filter_map(|p| p.to_str().map(str::to_owned))
                     .collect();
                 v.sort();
                 v
@@ -230,9 +231,9 @@ fn main() {
 
             let mut all_ok = true;
             for path in &paths {
-                eprintln!("Parsing {}", path);
+                eprintln!("Parsing {path}");
                 if let Err(e) = crate::config_impl::config_parse(path) {
-                    eprintln!("  FAILED: {}", e);
+                    eprintln!("  FAILED: {e}");
                     all_ok = false;
                 }
             }
@@ -240,7 +241,7 @@ fn main() {
             if all_ok {
                 eprintln!("No errors found.");
             }
-            process::exit(if all_ok { 0 } else { 1 });
+            process::exit(i32::from(!all_ok));
         }
 
         // ── reload ─────────────────────────────────────────────────────────
@@ -266,8 +267,7 @@ fn main() {
             let payload = read_payload(&expr);
             // Strip trailing newlines (matches C behaviour).
             let payload = payload.iter().rposition(|&b| b != b'\n')
-                .map(|i| &payload[..=i])
-                .unwrap_or(&payload);
+                .map_or(payload.as_slice(), |i| &payload[..=i]);
             ipc_exec(IpcMessageType::Macro, payload, timeout.unwrap_or(0));
         }
 
@@ -280,13 +280,13 @@ fn main() {
         // ── listen ─────────────────────────────────────────────────────────
         Some(Commands::Listen) => {
             let mut stream = ipc::ipc_connect().unwrap_or_else(|e| {
-                eprintln!("ERROR: Failed to connect to daemon: {}", e);
+                eprintln!("ERROR: Failed to connect to daemon: {e}");
                 process::exit(1);
             });
 
             let msg = IpcMessage::new(IpcMessageType::LayerListen, 0);
             msg.write_to(&mut stream).unwrap_or_else(|e| {
-                eprintln!("ERROR: {}", e);
+                eprintln!("ERROR: {e}");
                 process::exit(1);
             });
 

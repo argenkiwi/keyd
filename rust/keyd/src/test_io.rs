@@ -26,7 +26,7 @@ mod tests {
     use crate::keys::*;
 
     #[test]
-    fn test_basic_remapping() {
+    fn kbd_remaps_key_to_configured_target() {
         let mut cfg = Config::new();
         config_parse_string(&mut cfg, "[ids]\n*\n\n[main]\na = b\n").unwrap();
         let mut kbd = Keyboard::new(cfg);

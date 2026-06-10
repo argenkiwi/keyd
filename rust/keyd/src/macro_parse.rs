@@ -14,8 +14,7 @@ pub fn str_escape(s: &str) -> String {
                 Some(&'\\') => { res.push('\\'); chars.next(); }
                 Some(&')') => { res.push(')'); chars.next(); }
                 Some(&'(') => { res.push('('); chars.next(); }
-                Some(_) => { res.push('\\'); }
-                None => { res.push('\\'); }
+                Some(_) | None => { res.push('\\'); }
             }
         } else {
             res.push(c);
@@ -42,17 +41,17 @@ pub fn macro_parse(s: &str) -> Result<Macro, String> {
             let parts = tok.split('+');
             for key in parts {
                 if is_timeval(key) {
-                    let timeout = key[..key.len()-2].parse::<u16>().map_err(|_| format!("Invalid timeout: {}", key))?;
+                    let timeout = key[..key.len()-2].parse::<u16>().map_err(|_| format!("Invalid timeout: {key}"))?;
                     add_entry(&mut macro_obj, MacroEntryType::Timeout, timeout)?;
                 } else if let Some((code, _)) = parse_key_sequence(key) {
                     add_entry(&mut macro_obj, MacroEntryType::Hold, code as u16)?;
                 } else {
-                    return Err(format!("{} is not a valid key", key));
+                    return Err(format!("{key} is not a valid key"));
                 }
             }
             add_entry(&mut macro_obj, MacroEntryType::Release, 0)?;
         } else if is_timeval(tok) {
-            let timeout = tok[..tok.len()-2].parse::<u16>().map_err(|_| format!("Invalid timeout: {}", tok))?;
+            let timeout = tok[..tok.len()-2].parse::<u16>().map_err(|_| format!("Invalid timeout: {tok}"))?;
             add_entry(&mut macro_obj, MacroEntryType::Timeout, timeout)?;
         } else {
             for c in tok.chars() {
@@ -89,7 +88,7 @@ pub fn macro_parse(s: &str) -> Result<Macro, String> {
 
 fn add_entry(m: &mut Macro, t: MacroEntryType, d: u16) -> Result<(), String> {
     if m.sz as usize >= MAX_MACRO_ENTRIES {
-        return Err(format!("maximum macro size ({}) exceeded", MAX_MACRO_ENTRIES));
+        return Err(format!("maximum macro size ({MAX_MACRO_ENTRIES}) exceeded"));
     }
     m.entries[m.sz as usize] = MacroEntry { entry_type: t, data: d };
     m.sz += 1;

@@ -5,6 +5,13 @@ pub const CAP_MOUSE_ABS: u8 = 0x2;
 pub const CAP_KEYBOARD: u8 = 0x4;
 pub const CAP_KEY: u8 = 0x8;
 
+/// USB vendor ID assigned to all keyd virtual input devices.
+pub const KEYD_VENDOR_ID: u16 = 0x0FAC;
+/// USB product ID for the keyd virtual keyboard.
+pub const KEYD_KEYBOARD_PRODUCT_ID: u16 = 0x0ADE;
+/// USB product ID for the keyd virtual pointer.
+pub const KEYD_POINTER_PRODUCT_ID: u16 = 0x1ADE;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DeviceEventType {
     Key,
@@ -228,16 +235,19 @@ fn resolve_device_capabilities(fd: std::os::unix::io::RawFd)
     let mut relmask: u8 = 0;
     let mut absmask: u8 = 0;
 
+    // SAFETY: fd is a valid open evdev file descriptor; keymask is sized to hold KEY_MASK_LEN bytes.
     let r = unsafe {
         libc::ioctl(fd, eviocgbit(1 /* EV_KEY */, KEY_MASK_LEN), keymask.as_mut_ptr())
     };
     if r < 0 { return (0, 0, 0, 0); }
 
+    // SAFETY: fd is valid; absmask is a single byte buffer matching the requested 1-byte read.
     let r = unsafe {
         libc::ioctl(fd, eviocgbit(3 /* EV_ABS */, 1), &mut absmask as *mut u8)
     };
     if r < 0 { return (0, 0, 0, 0); }
 
+    // SAFETY: fd is valid; relmask is a single byte buffer matching the requested 1-byte read.
     let r = unsafe {
         libc::ioctl(fd, eviocgbit(2 /* EV_REL */, 1), &mut relmask as *mut u8)
     };
@@ -277,6 +287,7 @@ impl Device {
 
     pub fn init(path: &str) -> Result<Self, String> {
         let cpath = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
+        // SAFETY: cpath is a valid NUL-terminated C string; flags are valid O_* constants.
         let fd = unsafe {
             libc::open(cpath.as_ptr(), libc::O_RDWR | libc::O_NONBLOCK | libc::O_CLOEXEC)
         };
@@ -286,16 +297,20 @@ impl Device {
 
         let (caps, num_keys, relmask, absmask) = resolve_device_capabilities(fd);
         if caps == 0 {
+            // SAFETY: fd was successfully opened above and has not been closed.
             unsafe { libc::close(fd) };
             return Err(format!("{} has no usable capabilities", path));
         }
 
         let mut name_buf = [0u8; 64];
+        // SAFETY: fd is valid; name_buf is 64 bytes, matching EVIOCGNAME_64's expected buffer size.
         unsafe { libc::ioctl(fd, EVIOCGNAME_64, name_buf.as_mut_ptr()) };
         let nul = name_buf.iter().position(|&b| b == 0).unwrap_or(64);
         let name = String::from_utf8_lossy(&name_buf[..nul]).into_owned();
 
+        // SAFETY: input_id is #[repr(C)] with only integer fields valid when zero-initialized.
         let mut info: input_id = unsafe { std::mem::zeroed() };
+        // SAFETY: fd is valid; info is a properly-sized C struct for EVIOCGID.
         unsafe { libc::ioctl(fd, EVIOCGID, &mut info) };
 
         let uid = generate_uid(num_keys, absmask, relmask, &name);
@@ -303,7 +318,9 @@ impl Device {
 
         let (mut minx, mut maxx, mut miny, mut maxy) = (0u32, 0u32, 0u32, 0u32);
         if caps & CAP_MOUSE_ABS != 0 {
+            // SAFETY: input_absinfo is #[repr(C)] with only integer fields valid when zero-initialized.
             let mut ai: input_absinfo = unsafe { std::mem::zeroed() };
+            // SAFETY: fd is valid; ai is the correct C struct for eviocgabs.
             if unsafe { libc::ioctl(fd, eviocgabs(0 /*ABS_X*/), &mut ai) } == 0 {
                 minx = ai.minimum as u32; maxx = ai.maximum as u32;
             }
@@ -316,7 +333,7 @@ impl Device {
             fd,
             grabbed: false,
             capabilities: caps,
-            is_virtual: info.vendor == 0x0FAC,
+            is_virtual: info.vendor == KEYD_VENDOR_ID,
             id,
             name,
             path: path.to_string(),
@@ -330,10 +347,11 @@ impl Device {
         if self.grabbed { return Ok(()); }
 
         // Wait for all keys to be released before grabbing to avoid stuck keys.
-        let state_len = 96u32; // (KEY_MAX+7)/8
+        let state_len = KEY_MASK_LEN;
         let mut state = [0u8; 96];
         let mut pending_release = false;
         loop {
+            // SAFETY: self.fd is valid; state buffer is KEY_MASK_LEN (96) bytes matching EVIOCGKEY.
             let r = unsafe { libc::ioctl(self.fd, eviocgkey(state_len), state.as_mut_ptr()) };
             if r < 0 {
                 return Err("EVIOCGKEY failed".to_string());
@@ -342,14 +360,18 @@ impl Device {
             pending_release = true;
         }
         if pending_release {
+            // SAFETY: usleep has no memory-safety requirements.
             unsafe { libc::usleep(100) };
         }
 
+        // SAFETY: self.fd is valid; argument 1 requests exclusive grab.
         if unsafe { libc::ioctl(self.fd, EVIOCGRAB, 1usize) } < 0 {
             return Err("EVIOCGRAB failed".to_string());
         }
         // Drain queued events accumulated before the grab.
+        // SAFETY: input_event is #[repr(C)] with integer fields valid when zero-initialized.
         let mut ev: input_event = unsafe { std::mem::zeroed() };
+        // SAFETY: self.fd is valid; buffer pointer and size match input_event layout.
         while unsafe {
             libc::read(self.fd, &mut ev as *mut _ as *mut libc::c_void,
                        std::mem::size_of::<input_event>())
@@ -361,6 +383,7 @@ impl Device {
 
     pub fn ungrab(&mut self) -> Result<(), String> {
         if !self.grabbed { return Ok(()); }
+        // SAFETY: self.fd is valid; argument 0 releases the exclusive grab.
         if unsafe { libc::ioctl(self.fd, EVIOCGRAB, 0usize) } < 0 {
             return Err("EVIOCGRAB(0) failed".to_string());
         }
@@ -375,6 +398,7 @@ impl Device {
             code: led as u16,
             value: state as i32,
         };
+        // SAFETY: self.fd is valid; pointer and size match the input_event layout.
         unsafe {
             libc::write(self.fd, &ev as *const _ as *const libc::c_void,
                         std::mem::size_of::<input_event>());
@@ -382,13 +406,16 @@ impl Device {
     }
 
     pub fn read_event(&mut self) -> Option<DeviceEvent> {
+        // SAFETY: input_event is #[repr(C)] with integer fields valid when zero-initialized.
         let mut ev: input_event = unsafe { std::mem::zeroed() };
         let sz = std::mem::size_of::<input_event>();
+        // SAFETY: self.fd is valid; buffer pointer and size match input_event layout.
         let r = unsafe {
             libc::read(self.fd, &mut ev as *mut _ as *mut libc::c_void, sz)
         };
 
         if r < 0 {
+            // SAFETY: __errno_location returns a valid pointer to the thread-local errno on Linux.
             if unsafe { *libc::__errno_location() } == libc::EAGAIN {
                 return None;
             }

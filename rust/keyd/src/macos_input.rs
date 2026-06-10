@@ -30,8 +30,8 @@ const CG_EVENT_KEY_DOWN:       CGEventType = 10;
 const CG_EVENT_KEY_UP:         CGEventType = 11;
 const CG_EVENT_FLAGS_CHANGED:  CGEventType = 12;
 const NX_SYSDEFINED:           CGEventType = 14;
-const CG_TAP_DISABLED_TIMEOUT: CGEventType = 0xFFFFFFFE;
-const CG_TAP_DISABLED_USER:    CGEventType = 0xFFFFFFFF;
+const CG_TAP_DISABLED_TIMEOUT: CGEventType = 0xFFFF_FFFE;
+const CG_TAP_DISABLED_USER:    CGEventType = 0xFFFF_FFFF;
 
 const CG_HID_EVENT_TAP: u32 = 0;
 const CG_HEAD_INSERT:   u32 = 0;
@@ -61,6 +61,7 @@ type TapCallbackFn = unsafe extern "C" fn(
 // ── Framework linkage ────────────────────────────────────────────────────────
 
 #[link(name = "CoreGraphics", kind = "framework")]
+#[expect(clippy::duplicated_attributes, reason = "separate framework links share kind = framework")]
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
     fn CGEventTapCreate(
@@ -269,7 +270,7 @@ pub fn modifier_bit_for_cgkey(cgkey: u16) -> CGEventFlags {
 }
 
 pub fn is_modifier_cgkey(cgkey: u16) -> bool {
-    matches!(cgkey, 0x36 | 0x37 | 0x38 | 0x39 | 0x3A | 0x3B | 0x3C | 0x3D | 0x3E)
+    matches!(cgkey, 0x36..=0x3E)
 }
 
 pub fn active_modifier_flags(key_states: &[u8; 128]) -> CGEventFlags {
@@ -295,6 +296,8 @@ unsafe extern "C" fn tap_callback(
     user_info:  *mut c_void,
 ) -> CGEventRef {
     unsafe {
+        // SAFETY: user_info is the TapCtx pointer passed to CGEventTapCreate; it is valid
+        // for the lifetime of the run loop, and the callback is single-threaded.
         let ctx = &mut *(user_info as *mut TapCtx);
 
         if event_type == CG_TAP_DISABLED_TIMEOUT || event_type == CG_TAP_DISABLED_USER {
@@ -322,7 +325,7 @@ unsafe extern "C" fn tap_callback(
             _ => return event,  // NX_SYSDEFINED (media keys) etc: pass through
         };
 
-        log::trace!("keyd tap: cgkey={}, pressed={}", cgkey, pressed);
+        log::trace!("keyd tap: cgkey={cgkey}, pressed={pressed}");
         let raw: [u8; 3] = [(cgkey >> 8) as u8, (cgkey & 0xFF) as u8, pressed];
         if libc::write(ctx.write_fd, raw.as_ptr() as *const c_void, 3) < 0 {
             log::error!("keyd: failed to write to pipe");
@@ -348,9 +351,11 @@ fn infer_mod_pressed(ctx: &mut TapCtx, cgkey: u16, flags: CGEventFlags) -> u8 {
 /// Start the CGEventTap on a background thread. Returns the pipe read fd.
 pub fn tap_init() -> RawFd {
     let mut fds = [0i32; 2];
+    // SAFETY: fds is a 2-element array; pipe() fills it with valid read/write file descriptors.
     assert!(unsafe { libc::pipe(fds.as_mut_ptr()) } == 0, "pipe() failed");
     let read_fd  = fds[0];
     let write_fd = fds[1];
+    // SAFETY: read_fd and write_fd are valid fds just created by pipe(); O_NONBLOCK is a valid flag.
     unsafe {
         libc::fcntl(read_fd, libc::F_SETFL, libc::O_NONBLOCK);
         libc::fcntl(write_fd, libc::F_SETFL, libc::O_NONBLOCK);
@@ -369,8 +374,10 @@ pub fn tap_init() -> RawFd {
         | (1u64 << NX_SYSDEFINED);
 
     std::thread::spawn(move || {
+        // SAFETY: ctx_addr was obtained from Box::into_raw; the Box is not freed until the run loop exits.
         let ctx_ptr = ctx_addr as *mut TapCtx;
         unsafe {
+            // SAFETY: All CGEventTap API pointers are valid CFTypeRefs; tap_callback is a valid C fn pointer.
             let port = CGEventTapCreate(
                 CG_HID_EVENT_TAP, CG_HEAD_INSERT, CG_TAP_DEFAULT,
                 mask, tap_callback, ctx_ptr as *mut c_void,
@@ -411,6 +418,7 @@ pub enum TapReadResult {
 /// Non-blocking read of one pending event from the tap pipe.
 pub fn tap_read(fd: RawFd) -> TapReadResult {
     let mut buf = [0u8; 3];
+    // SAFETY: fd is the read end of the pipe created in tap_init; buffer is 3 bytes as expected.
     let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut c_void, 3) };
     if n == 0 {
         return TapReadResult::EOF;
@@ -424,6 +432,7 @@ pub fn tap_read(fd: RawFd) -> TapReadResult {
 /// Read the system key-repeat delay and interval (both in milliseconds).
 /// Falls back to macOS defaults (500 ms delay, 33 ms interval) if unavailable.
 pub fn get_repeat_settings() -> (u64, u64) {
+    // SAFETY: CoreFoundation API calls; all returned CFTypeRefs are released before returning.
     unsafe {
         let make_cfstr = |s: &std::ffi::CStr| -> CFStringRef {
             CFStringCreateWithCString(std::ptr::null(), s.as_ptr(), CF_STRING_ENCODING_UTF8)
@@ -460,6 +469,7 @@ pub fn get_repeat_settings() -> (u64, u64) {
 
 /// Inject a repeat key-down event tagged with kCGKeyboardEventAutorepeat=1.
 pub fn post_key_repeat(cgkey: u16, key_states: &[u8; 128]) {
+    // SAFETY: CGEventCreateKeyboardEvent and CGEventPost are thread-safe CGEvent APIs.
     unsafe {
         let ev = CGEventCreateKeyboardEvent(std::ptr::null(), cgkey, true);
         if ev.is_null() { return; }
@@ -553,16 +563,16 @@ pub fn keyd_to_nx_keytype(keyd: u8) -> Option<isize> {
 /// Volume, brightness, play/pause, next, previous keys cannot be injected via
 /// CGEventCreateKeyboardEvent on modern macOS. They require NX_SYSDEFINED events.
 pub fn post_media_key(nx_type: isize, pressed: bool) {
+    // SAFETY: Objective-C runtime calls via raw selectors; all pointer arguments are valid or null as required.
     unsafe {
-        let class = objc_getClass(b"NSEvent\0".as_ptr() as *const _);
+        let class = objc_getClass(c"NSEvent".as_ptr());
         if class.is_null() {
             log::error!("keyd: NSEvent class unavailable");
             return;
         }
 
         let sel = sel_registerName(
-            b"otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:\0"
-                .as_ptr() as *const _,
+            c"otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:".as_ptr(),
         );
 
         // data1 = (nx_type << 16) | (direction << 8)
@@ -586,15 +596,15 @@ pub fn post_media_key(nx_type: isize, pressed: bool) {
         );
 
         if ns_event.is_null() {
-            log::warn!("keyd: failed to create NSEvent for media key nx_type={}", nx_type);
+            log::warn!("keyd: failed to create NSEvent for media key nx_type={nx_type}");
             return;
         }
 
-        let cg_sel   = sel_registerName(b"CGEvent\0".as_ptr() as *const _);
+        let cg_sel   = sel_registerName(c"CGEvent".as_ptr());
         let cg_event = ns_event_get_cgevent(ns_event, cg_sel);
 
         if cg_event.is_null() {
-            log::warn!("keyd: NSEvent.CGEvent is null for nx_type={}", nx_type);
+            log::warn!("keyd: NSEvent.CGEvent is null for nx_type={nx_type}");
             return;
         }
 
@@ -604,7 +614,9 @@ pub fn post_media_key(nx_type: isize, pressed: bool) {
 
 /// Inject a key event via CGEventPost with correct modifier flags.
 pub fn post_key(cgkey: u16, pressed: bool, key_states: &[u8; 128]) {
-    log::trace!("keyd post: cgkey={}, pressed={}", cgkey, pressed);
+    log::trace!("keyd post: cgkey={cgkey}, pressed={pressed}");
+    // SAFETY: CGEventCreateKeyboardEvent and CGEventPost are thread-safe CGEvent APIs;
+    // the event is released via CGEventPost ownership transfer.
     unsafe {
         let ev = CGEventCreateKeyboardEvent(std::ptr::null(), cgkey, pressed);
         if ev.is_null() { return; }

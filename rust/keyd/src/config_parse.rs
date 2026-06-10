@@ -1,3 +1,5 @@
+//! Descriptor and macro expression parsing — converts config value strings into `Descriptor` structs.
+
 use crate::config::*;
 use crate::macro_types::*;
 use crate::keys::*;
@@ -18,9 +20,9 @@ impl ParseCtx {
 
 pub fn config_warn(ctx: &mut ParseCtx, msg: &str) {
     if let Some(ref file) = ctx.current_file {
-        eprintln!("\tw{{WARNING:}} b{{{}}}:r{{{}}}: {}", file, ctx.current_line + 1, msg);
+        eprintln!("\tw{{WARNING:}} b{{{file}}}:r{{{}}}: {msg}", ctx.current_line + 1);
     } else {
-        eprintln!("\tw{{WARNING:}} {}", msg);
+        eprintln!("\tw{{WARNING:}} {msg}");
     }
     ctx.nr_warnings += 1;
 }
@@ -132,7 +134,7 @@ pub fn config_parse_descriptor(
 
         if let Some(layer_name) = layer {
             let key_name = KEYCODE_TABLE[code as usize].name.unwrap_or("UNKNOWN");
-            config_warn(ctx, &format!("You should use layer({}) instead of assigning to {} directly.", layer_name, key_name));
+            config_warn(ctx, &format!("You should use layer({layer_name}) instead of assigning to {key_name} directly."));
             if let Some(idx) = config_get_layer_index(config, layer_name) {
                 return Ok(Descriptor {
                     op: Op::Layer,
@@ -194,11 +196,11 @@ pub fn config_parse_descriptor(
                  }
                  if let Some(idx) = config_get_layer_index(config, arg) {
                      if config.layers[idx].layer_type == LayerType::Layout {
-                         return Err(format!("{} is not a valid layer", arg));
+                         return Err(format!("{arg} is not a valid layer"));
                      }
                      idxs[i] = idx as i16;
                  } else {
-                     return Err(format!("{} is not a valid layer", arg));
+                     return Err(format!("{arg} is not a valid layer"));
                  }
              }
              return Ok(Descriptor {
@@ -242,7 +244,7 @@ pub fn config_parse_descriptor(
         for (name, op, arg_types) in actions {
             if fn_name == name {
                 if args.len() != arg_types.len() {
-                    return Err(format!("{} requires {} arguments", name, arg_types.len()));
+                    return Err(format!("{name} requires {} arguments", arg_types.len()));
                 }
                 
                 // We need to parse arguments. This is tricky because we might need to mutate config (for nested descriptors/macros)
@@ -258,34 +260,34 @@ pub fn config_parse_descriptor(
                             }
                             if let Some(idx) = config_get_layer_index(config, arg_str) {
                                 if config.layers[idx].layer_type == LayerType::Layout {
-                                    return Err(format!("{} is not a valid layer", arg_str));
+                                    return Err(format!("{arg_str} is not a valid layer"));
                                 }
                                 parsed_args.push(idx as i16);
                             } else {
-                                return Err(format!("{} is not a valid layer", arg_str));
+                                return Err(format!("{arg_str} is not a valid layer"));
                             }
                         }
                         "layout" => {
                             if let Some(idx) = config_get_layer_index(config, arg_str) {
                                 if idx != 0 && config.layers[idx].layer_type != LayerType::Layout {
-                                    return Err(format!("{} is not a valid layout", arg_str));
+                                    return Err(format!("{arg_str} is not a valid layout"));
                                 }
                                 parsed_args.push(idx as i16);
                             } else {
-                                return Err(format!("{} is not a valid layout", arg_str));
+                                return Err(format!("{arg_str} is not a valid layout"));
                             }
                         }
                         "descriptor" | "keysequence_descriptor" => {
                             let desc = config_parse_descriptor(arg_str, config, ctx)?;
                             if *arg_type == "keysequence_descriptor" && desc.op != Op::KeySequence {
-                                return Err(format!("{} is not a valid keysequence", arg_str));
+                                return Err(format!("{arg_str} is not a valid keysequence"));
                             }
                             let idx = config.descriptors.len();
                             config.descriptors.push(desc);
                             parsed_args.push(idx as i16);
                         }
                         "timeout" | "sensitivity" => {
-                            parsed_args.push(arg_str.parse::<i16>().map_err(|_| format!("Invalid number: {}", arg_str))?);
+                            parsed_args.push(arg_str.parse::<i16>().map_err(|_| format!("Invalid number: {arg_str}"))?);
                         }
                         "macro" => {
                             let m = config_parse_macro_expression(arg_str)?;
@@ -299,18 +301,14 @@ pub fn config_parse_descriptor(
 
                 let data = match op {
                     Op::Swap | Op::Oneshot | Op::Toggle | Op::Layer | Op::Layout => DescriptorData::Layer(DescLayer { idx: parsed_args[0] }),
-                    Op::Clear => DescriptorData::None,
                     Op::ClearM => DescriptorData::MacroOp(DescMacro { macro_idx: parsed_args[0] }),
                     Op::SwapM | Op::ToggleM | Op::LayerM | Op::OneshotM => DescriptorData::LayerMacro(DescLayerMacro { idx: parsed_args[0], macro_idx: parsed_args[1] }),
-                    Op::OneshotK => DescriptorData::Overload(DescOverload { layer_idx: parsed_args[0], action_idx: parsed_args[1] }),
-                    Op::Overload => DescriptorData::Overload(DescOverload { layer_idx: parsed_args[0], action_idx: parsed_args[1] }),
+                    Op::OneshotK | Op::Overload => DescriptorData::Overload(DescOverload { layer_idx: parsed_args[0], action_idx: parsed_args[1] }),
                     Op::OverloadTimeout | Op::OverloadTimeoutTap => DescriptorData::OverloadTo(DescOverloadTo { layer_idx: parsed_args[0], action_idx: parsed_args[1], timeout: parsed_args[2] as u16 }),
                     Op::OverloadIdleTimeout => DescriptorData::OverloadIdle(DescOverloadIdle { action1_idx: parsed_args[0], action2_idx: parsed_args[1], timeout: parsed_args[2] as u16 }),
                     Op::Timeout => DescriptorData::TimeoutOp(DescTimeout { action1_idx: parsed_args[0], timeout: parsed_args[1] as u16, action2_idx: parsed_args[2] }),
                     Op::Macro2 => DescriptorData::Macro2(DescMacro2 { delay: parsed_args[0] as u16, interval: parsed_args[1] as u16, macro_idx: parsed_args[2] }),
-                    Op::Repeat => DescriptorData::None,
                     Op::ScrollToggleOn | Op::ScrollToggle | Op::Scroll => DescriptorData::Scroll(DescScroll { sensitivity: parsed_args[0] }),
-                    Op::ScrollToggleOff => DescriptorData::None,
                     _ => DescriptorData::None,
                 };
 
