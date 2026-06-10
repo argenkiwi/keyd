@@ -335,7 +335,7 @@ impl Daemon {
         #[cfg(target_os = "linux")]
         let mut devmon: Option<inotify::Inotify> = {
             use inotify::{Inotify, WatchMask};
-            Inotify::init().ok().and_then(|mut ino| {
+            Inotify::init().ok().and_then(|ino| {
                 ino.watches().add("/dev/input/", WatchMask::CREATE).ok()?;
                 Some(ino)
             })
